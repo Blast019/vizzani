@@ -1,0 +1,8 @@
+# Repositório público (GitHub Pages): só os arquivos do app.
+# Ficam fora: anotações internas, SQL do banco e o protótipo antigo.
+CLAUDE.md
+supabase/
+vizzani-app.html
+vizzani-app.v1.html
+*.log
+.vscode/
