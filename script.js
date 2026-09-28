@@ -218,6 +218,15 @@ function usoClubeMes(cid, data=iso(HOJE), ignorar){
   const m = data.slice(0,7);
   return D.at.filter(a=>a.clube && a.id!==ignorar && a.data.slice(0,7)===m && a.status!=='cancelado' && donoAt(a)===cid).length;
 }
+// Uso do Clube no mês atual e nos próximos meses que já têm lavagem agendada (a lavagem conta no mês em que acontece)
+function mesesClube(cid){
+  const atual = iso(HOJE).slice(0,7), ms = new Set([atual]);
+  D.at.forEach(a=>{ if(a.clube && a.status!=='cancelado' && a.data.slice(0,7)>atual && donoAt(a)===cid) ms.add(a.data.slice(0,7)); });
+  return [...ms].sort().map(m=>({ nome: dataDe(m+'-01').toLocaleDateString('pt-BR',{month:'long'}), usos: usoClubeMes(cid, m+'-01'), atual: m===atual }));
+}
+// "setembro: 1 de 2 · outubro: 2 de 2"
+const resumoClube = cid => mesesClube(cid).map(x=>`${x.nome}: ${x.usos} de ${D.config.clubeLavagens}`).join(' · ');
+const proximosMesesClube = cid => mesesClube(cid).filter(x=>!x.atual).map(x=>`${x.nome}: ${x.usos} de ${D.config.clubeLavagens} já agendada${x.usos>1?'s':''}`).join(' · ');
 // Mesmas regras do servidor (009): só lavagem, seg–sex, assinatura ativa, limite por mês
 function clubeElegivel(cid, sid, data){
   if(!noClube(cid)) return {ok:false};
@@ -451,7 +460,8 @@ function cartaoClubeCliente(mc){
   return `<div class="painel" style="margin-top:14px;border-color:#2a45b8;background:linear-gradient(135deg,#0c1850,#15171b 70%)">
     <div class="linha entre"><b style="font-size:17px">⭐ Você é do Clube Vizzani</b><span class="selo azul">${PORTES[mc.porte]||''}</span></div>
     <div class="linha entre" style="margin-top:10px"><span class="contador" style="font-size:36px">${restam}<small>de ${mc.limite_mes} ${restam===1?'lavagem disponível':'lavagens disponíveis'} em ${mes}</small></span></div>
-    <p class="mudo pequeno" style="margin:6px 0 0">${esc(nomesNoClube())} · de segunda a sexta · sem sinal e sem pagar na hora.</p>
+    ${proximosMesesClube(clienteAtual)?`<p class="pequeno" style="margin:6px 0 0">📅 ${proximosMesesClube(clienteAtual)}</p>`:''}
+    <p class="mudo pequeno" style="margin:6px 0 0">${esc(nomesNoClube())} · de segunda a sexta · sem sinal e sem pagar na hora. Cada lavagem conta no mês em que acontece.</p>
     ${atrasado
       ? `<div class="erro" style="margin:10px 0 0">A mensalidade venceu em ${fmtData(mc.proxima)}. Fale com a Vizzani para manter as lavagens incluídas.
           <a class="btn zap peq" style="text-decoration:none;margin-top:8px" target="_blank" rel="noopener" href="${linkZap(D.loja.whatsapp.replace(/^55/,''), 'Olá! Quero pagar a mensalidade do Clube Vizzani.')}"><span>Falar no WhatsApp</span></a></div>`
@@ -731,6 +741,7 @@ function telaClube(){
       <div class="linha entre"><b>Plano mensal ativo</b><span class="selo azul">desde ${fmtData(D.clube[c.id].desde)}</span></div>
       <p class="sub">${Math.max(0,D.config.clubeLavagens-usos)} de ${D.config.clubeLavagens} lavagens disponíveis este mês.</p>
       <div class="barra"><i style="width:${Math.min(100,usos/D.config.clubeLavagens*100)}%"></i></div>
+      ${proximosMesesClube(c.id)?`<p class="pequeno">📅 ${proximosMesesClube(c.id)}</p>`:''}
       <p class="mudo pequeno">Incluso: ${esc(nomesNoClube())}, de segunda a sexta, sem sinal. Nos outros serviços: 10% de desconto e pontos em dobro.</p>
       ${D.meuClube?.proxima?`<p class="pequeno">${D.meuClube.situacao==='aberto'&&D.meuClube.dias_atraso>0?`<span class="sai">Mensalidade em aberto desde ${fmtData(D.meuClube.proxima)}.</span>`:`Próxima mensalidade: <b>${fmtData(D.meuClube.proxima)}</b> · ${brl(D.meuClube.valor_mes)}`}</p>`:''}
       <button class="link" onclick="cancelarClube()">Cancelar assinatura</button>
@@ -1535,7 +1546,7 @@ async function atenderAgora(placa,sid,chuva,clube=false){
 function clubeBalcao(c, v){
   const cl = D.clube[c.id], porte = cl?.porte || (v.porte);
   if(cl?.ativo) return `<div class="painel" style="border-color:#2a45b8"><div class="linha entre"><b>Clube ativo</b><span class="selo azul">desde ${fmtData(cl.desde)}</span></div>
-    <p class="mudo pequeno" style="margin:6px 0 10px">${usoClubeMes(c.id)} de ${D.config.clubeLavagens} lavagens usadas este mês · ${brl(D.config.clubePrecos[porte])}/mês (${PORTES[porte]})</p>
+    <p class="mudo pequeno" style="margin:6px 0 10px">Lavagens usadas/agendadas: ${resumoClube(c.id)} · ${brl(D.config.clubePrecos[porte])}/mês (${PORTES[porte]})</p>
     <div class="grade" style="grid-template-columns:1fr 1fr"><button class="btn peq" onclick="abrirMensalidade('${c.id}','${porte}',false)"><span>Registrar mensalidade</span></button><button class="btn sec peq" onclick="encerrarClube('${c.id}')"><span>Encerrar</span></button></div></div>`;
   if(cl?.pendente) return `<div class="info"><b>${esc(c.nome.split(' ')[0])} pediu para assinar o Clube.</b><br>Ative quando receber a 1ª mensalidade (${brl(D.config.clubePrecos[porte])}).
     <button class="btn bloco" style="margin-top:10px" onclick="abrirMensalidade('${c.id}','${porte}',true)"><span>Ativar Clube</span></button></div>`;
@@ -1666,7 +1677,7 @@ function abrirCliente(cid){
     : `<div class="${cl.tipo==='aberto'&&cl.atraso>0?'erro':'info'}"><b>Clube ${PORTES[cl.porte]} · ${brl(D.config.clubePrecos[cl.porte])}/mês</b><br>
         ${cl.tipo==='em_dia'?`Em dia. Próxima mensalidade: ${fmtData(cl.proximo)}.`:cl.atraso>0?`Mensalidade de ${fmtData(cl.vencimento)} em aberto há ${cl.atraso} dia${cl.atraso>1?'s':''}.`:'Mensalidade vence hoje.'}
         ${cl.ultimo?`<br><span class="pequeno">Último pagamento: ${fmtData(cl.ultimo.data)} · ${brl(cl.ultimo.valor)} · ${esc(cl.ultimo.forma)}</span>`:''}
-        <br><span class="pequeno">${usoClubeMes(cid)} de ${D.config.clubeLavagens} lavagens usadas este mês · desde ${fmtData(cl.desde)}</span>
+        <br><span class="pequeno">Lavagens usadas/agendadas: ${resumoClube(cid)} · desde ${fmtData(cl.desde)}</span>
         ${pagamentosClubeHTML(cid)}
         <div class="acoes"><button class="btn peq" onclick="fecharModal();abrirMensalidade('${cid}','${cl.porte}',false)"><span>Registrar pagamento</span></button>${cl.tipo==='aberto'?`<a class="btn zap peq" style="text-decoration:none" target="_blank" rel="noopener" href="${linkZap(c.fone,msgCobrancaClube(c,cl))}"><span>Cobrar</span></a>`:''}<button class="btn sec peq" onclick="fecharModal();encerrarClube('${cid}')"><span>Encerrar</span></button></div></div>`;
   abrirModal(`<h2 style="margin-top:0">${esc(c.nome)}</h2>
@@ -1730,7 +1741,7 @@ function telaClubeDono(){
   if(aberto.length) h += `<div class="traco">MENSALIDADE EM ABERTO</div><div class="painel">${aberto.sort((a,b)=>b.s.atraso-a.s.atraso).map(({c,s})=>`<div class="fila" style="grid-template-columns:1fr auto"><div role="button" style="cursor:pointer" onclick="abrirCliente('${c.id}')"><b>${esc(c.nome)}</b> <span class="selo ${s.atraso>0?'vermelho':'amarelo'}">${s.atraso>0?s.atraso+' dia'+(s.atraso>1?'s':'')+' de atraso':'vence hoje'}</span><div class="mudo pequeno">venceu ${fmtData(s.vencimento)} · ${brl(D.config.clubePrecos[s.porte])}${s.ultimo?' · último pgto '+fmtData(s.ultimo.data):''}</div></div>
       <div class="acoes" style="margin:0;justify-content:flex-end"><button class="btn peq" onclick="abrirMensalidade('${c.id}','${s.porte}',false)"><span>Recebi</span></button><a class="btn zap peq" style="text-decoration:none" target="_blank" rel="noopener" href="${linkZap(c.fone,msgCobrancaClube(c,s))}"><span>Cobrar</span></a></div></div>`).join('')}
     <p class="mudo pequeno">Muito atrasado? Abra a ficha e toque em "Encerrar": as lavagens incluídas param na hora.</p></div>`;
-  h += `<div class="traco">EM DIA</div><div class="painel">${emDia.length?emDia.sort((a,b)=>a.s.proximo.localeCompare(b.s.proximo)).map(({c,s})=>`<div class="fila" role="button" style="cursor:pointer;grid-template-columns:1fr auto" onclick="abrirCliente('${c.id}')"><div><b>${esc(c.nome)}</b><div class="mudo pequeno">${PORTES[s.porte]} · ${usoClubeMes(c.id)}/${D.config.clubeLavagens} lavagens no mês</div></div><div style="text-align:right" class="pequeno">próxima<br><b>${fmtData(s.proximo)}</b></div></div>`).join(''):'<div class="vazio">Nenhum assinante em dia.</div>'}</div>
+  h += `<div class="traco">EM DIA</div><div class="painel">${emDia.length?emDia.sort((a,b)=>a.s.proximo.localeCompare(b.s.proximo)).map(({c,s})=>`<div class="fila" role="button" style="cursor:pointer;grid-template-columns:1fr auto" onclick="abrirCliente('${c.id}')"><div><b>${esc(c.nome)}</b><div class="mudo pequeno">${PORTES[s.porte]} · lavagens ${resumoClube(c.id)}</div></div><div style="text-align:right" class="pequeno">próxima<br><b>${fmtData(s.proximo)}</b></div></div>`).join(''):'<div class="vazio">Nenhum assinante em dia.</div>'}</div>
     <p class="mudo pequeno">A mensalidade vence todo mês no mesmo dia em que a assinatura foi ativada. Pagamento feito até 7 dias antes já conta para o mês.</p>`;
   return h;
 }
