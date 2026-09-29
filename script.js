@@ -110,7 +110,7 @@ async function carregar(){
       pago: a.pago, forma: a.forma_pagto, sinal: a.sinal, sinalStatus: a.sinal_status, sinalDevolvido: !!a.sinal_devolvido_em,
       clube: a.clube, chuva: a.chuva, resgate: a.resgate, pontos: a.pontos, origem: a.origem, atraso: a.atraso_min,
       remarcadoDe: a.remarcado_de, canceladoPor: a.cancelado_por, motivoCancel: a.motivo_cancel, nota: a.nota, comentario: a.comentario,
-      lembrete: a.lembrete_em, confirmado: a.confirmado,
+      lembrete: a.lembrete_em, confirmado: a.confirmado, entregueEm: a.entregue_em,
       vistoria: v ? { avarias: v.avarias || [], obs: v.obs || '', ciente: v.ciente, quando: v.quando, manter: v.manter,
         fotos: fotos.filter(f => f.momento === 'antes'), fotosApagadas: v.fotos_apagadas_qtd } : null,
       depois: fotos.some(f => f.momento === 'depois') ? { fotos: fotos.filter(f => f.momento === 'depois') } : (a.fotos_depois_apagadas_em ? { fotos: [], apagadas: true } : null),
@@ -1194,7 +1194,8 @@ function movimentos(ini,fim){
   D.at.forEach(a=>{
     if(!dentro(a.data)) return;
     const quem = cliente(donoAt(a))?.nome || '', s = servico(a.servicoId)?.nome || '';
-    const sinal = a.sinal ? D.config.sinal : 0, base = {data:a.data, tipo:'entrada', atId:a.id, pessoa:quem, detalhes:`${a.placa} · ${veiculo(a.placa)?.modelo||''}`};
+    const sinal = a.sinal ? D.config.sinal : 0, base = {data:a.data, tipo:'entrada', atId:a.id, pessoa:quem, detalhes:`${a.placa} · ${veiculo(a.placa)?.modelo||''}`,
+      quando: +new Date(a.entregueEm || `${a.data}T${a.hora}`)};
     if(a.status==='entregue' && a.pago && a.valor>0){
       if(sinal && a.valor>=sinal){
         r.push({...base, cat:'Serviços', desc:`Sinal · ${s}`, valor:sinal, forma:'Pix', sid:a.servicoId});
@@ -1203,8 +1204,9 @@ function movimentos(ini,fim){
     }
     if(sinal && a.sinalStatus==='retido') r.push({...base, cat:'Sinais retidos', desc:`Sinal retido (${a.status==='faltou'?'não veio':'cancelou em cima da hora'})`, valor:sinal, forma:'Pix'});
   });
-  D.lancamentos.filter(l=>dentro(l.data)).forEach(l=>r.push({...l, manual:true}));
-  return r.sort((a,b)=>b.data.localeCompare(a.data));
+  D.lancamentos.filter(l=>dentro(l.data)).forEach(l=>r.push({...l, manual:true, quando: +new Date(l.criadoEm)}));
+  // Mais recente no topo: primeiro pelo dia, depois pela hora em que entrou (entrega do serviço ou lançamento)
+  return r.sort((a,b)=>b.data.localeCompare(a.data) || (b.quando||0)-(a.quando||0));
 }
 let subCaixa = 'dinheiro';
 const abasCaixa = () => `<div class="abas-entrar" style="margin:16px 0 0"><button class="${subCaixa==='dinheiro'?'on':''}" onclick="subCaixa='dinheiro';render()">Dinheiro</button><button class="${subCaixa==='estoque'?'on':''}" onclick="subCaixa='estoque';render()">Estoque${produtosBaixos().length?' ⚠':''}</button></div>`;
