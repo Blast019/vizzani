@@ -201,12 +201,16 @@ async function atualizarQuieto(){
 function hojeAtual(){ const h = new Date(); h.setHours(0,0,0,0); if(h.getTime() !== HOJE.getTime()){ HOJE.setTime(h.getTime()); return true; } return false; }
 
 /* ========= Consultas ========= */
+// Mais recente primeiro: pelo dia e, no mesmo dia, pela hora (entrega do serviço ou lançamento)
+const quandoAt = a => +new Date(a.entregueEm || `${a.data}T${a.hora}`);
+const maisRecenteAt = (a,b) => b.data.localeCompare(a.data) || quandoAt(b)-quandoAt(a);
+const maisRecenteL = (a,b) => b.data.localeCompare(a.data) || (+new Date(b.criadoEm)||0)-(+new Date(a.criadoEm)||0);
 const servico = id => D.servicos.find(s=>s.id===id);
 const veiculo = placa => D.veiculos.find(v=>v.placa===placa);
 const cliente = id => D.clientes.find(c=>c.id===id);
 const donoDe = placa => cliente(veiculo(placa)?.clienteId);
 const veiculosDe = cid => D.veiculos.filter(v=>v.clienteId===cid);
-const entreguesDe = placa => D.at.filter(a=>a.placa===placa && a.status==='entregue').sort((a,b)=>b.data.localeCompare(a.data));
+const entreguesDe = placa => D.at.filter(a=>a.placa===placa && a.status==='entregue').sort(maisRecenteAt);
 const ultimaLavagem = placa => entreguesDe(placa).find(a=>servico(a.servicoId)?.lavagem || a.chuva);
 function pontosDe(cid){
   const ganhos = D.at.filter(a=>a.status==='entregue' && donoAt(a)===cid).reduce((s,a)=>s+(a.pontos||0),0);
@@ -492,7 +496,7 @@ function telaInicio(){
     </div>`;
   });
   // avaliação do último serviço entregue (até 7 dias)
-  const avaliar = D.at.filter(a=>a.status==='entregue' && donoAt(a)===c.id && !a.nota && diasEntre(a.data,iso(HOJE))<=7).sort((a,b)=>b.data.localeCompare(a.data))[0];
+  const avaliar = D.at.filter(a=>a.status==='entregue' && donoAt(a)===c.id && !a.nota && diasEntre(a.data,iso(HOJE))<=7).sort(maisRecenteAt)[0];
   if(avaliar) h += `<div class="painel" style="margin-top:16px"><b>Como ficou o ${esc(veiculo(avaliar.placa)?.modelo||'carro')}?</b><div class="mudo pequeno">${esc(servico(avaliar.servicoId).nome)} em ${fmtData(avaliar.data)}</div>
     <div class="estrelas">${[1,2,3,4,5].map(n=>`<button onclick="avaliar('${avaliar.id}',${n})" aria-label="${n} estrela${n>1?'s':''}">${'★'}</button>`).join('')}</div><div class="mudo pequeno">Toque nas estrelas: 1 = ruim, 5 = excelente.</div></div>`;
 
@@ -1606,7 +1610,7 @@ function statusClube(cid){
   if(cl.pendente) return {tipo:'pendente', porte:cl.porte};
   if(!cl.ativo) return {tipo:'encerrado', porte:cl.porte};
   const ini = dataDe(cl.desde), preco = D.config.clubePrecos[cl.porte] || 1;
-  const pags = D.lancamentos.filter(l=>l.tipo==='entrada' && l.cat==='Clube' && l.clienteId===cid && l.data>=iso(addDias(ini,-7))).sort((a,b)=>b.data.localeCompare(a.data));
+  const pags = D.lancamentos.filter(l=>l.tipo==='entrada' && l.cat==='Clube' && l.clienteId===cid && l.data>=iso(addDias(ini,-7))).sort(maisRecenteL);
   const meses = pags.reduce((s,l)=>s + Math.max(1, Math.round(l.valor/preco)), 0);
   const cobertoAte = venceNoMes(ini.getFullYear(), ini.getMonth()+meses, ini.getDate());   // próxima mensalidade a pagar
   return cobertoAte > HOJE
@@ -1617,7 +1621,7 @@ const clubeAtencao = () => Object.keys(D.clube).filter(cid=>{ const s = statusCl
 
 function resumoCliente(c){
   const vs = veiculosDe(c.id), ats = D.at.filter(a=>donoAt(a)===c.id);
-  const entregues = ats.filter(a=>a.status==='entregue').sort((a,b)=>b.data.localeCompare(a.data));
+  const entregues = ats.filter(a=>a.status==='entregue').sort(maisRecenteAt);
   const avulsas = D.lancamentos.filter(l=>l.tipo==='entrada' && l.clienteId===c.id);
   const total = entregues.reduce((s,a)=>s+a.valor,0) + avulsas.reduce((s,l)=>s+l.valor,0);
   const ult = entregues[0];
@@ -1700,8 +1704,8 @@ function abrirCliente(cid){
     ${r.vs.length?r.vs.map(v=>`<div class="linha entre" style="margin-bottom:8px">${placaHTML(v.placa,true)}<span class="pequeno">${esc(v.modelo)} · ${PORTES[v.porte]}</span><button class="btn sec peq" onclick="fecharModal();buscaPlaca='${v.placa}';irPara('balcao')"><span>Ficha</span></button></div>`).join(''):'<p class="mudo pequeno">Nenhum carro na conta.</p>'}
     ${r.proximos.length?`<div class="traco">AGENDADO</div>${r.proximos.map(a=>`<p class="pequeno" style="margin:4px 0">${esc(descAt(a))} · ${esc(a.placa)}</p>`).join('')}`:''}
     <div class="traco">HISTÓRICO</div>
-    ${r.entregues.length||r.avulsas.length?`<table class="tabela">${[...r.entregues.map(a=>({data:a.data, txt:esc(servico(a.servicoId)?.nome||'')+' · '+esc(a.placa)+(a.nota?' · '+'★'.repeat(a.nota):''), valor:a.valor})), ...r.avulsas.map(l=>({data:l.data, txt:esc(l.desc)+(l.detalhes?' · '+esc(l.detalhes):''), valor:l.valor}))]
-      .sort((a,b)=>b.data.localeCompare(a.data)).slice(0,15).map(x=>`<tr><td class="mudo">${fmtData(x.data)}</td><td>${x.txt}</td><td style="text-align:right">${brl(x.valor)}</td></tr>`).join('')}</table>`:'<p class="mudo pequeno">Nenhum serviço ou compra ainda.</p>'}
+    ${r.entregues.length||r.avulsas.length?`<table class="tabela">${[...r.entregues.map(a=>({data:a.data, txt:esc(servico(a.servicoId)?.nome||'')+' · '+esc(a.placa)+(a.nota?' · '+'★'.repeat(a.nota):''), valor:a.valor, quando:quandoAt(a)})), ...r.avulsas.map(l=>({data:l.data, txt:esc(l.desc)+(l.detalhes?' · '+esc(l.detalhes):''), valor:l.valor, quando:+new Date(l.criadoEm)||0}))]
+      .sort((a,b)=>b.data.localeCompare(a.data) || b.quando-a.quando).slice(0,15).map(x=>`<tr><td class="mudo">${fmtData(x.data)}</td><td>${x.txt}</td><td style="text-align:right">${brl(x.valor)}</td></tr>`).join('')}</table>`:'<p class="mudo pequeno">Nenhum serviço ou compra ainda.</p>'}
     <div class="grade" style="grid-template-columns:1fr 1fr;margin-top:14px">
       <a class="btn zap peq" style="text-decoration:none" target="_blank" rel="noopener" href="${linkZap(c.fone,`Olá, ${c.nome.split(' ')[0]}! Aqui é da Vizzani Estética.`)}"><span>WhatsApp</span></a>
       <button class="btn sec peq" onclick="editarCliente('${cid}')"><span>Editar</span></button>
@@ -1712,7 +1716,7 @@ function abrirCliente(cid){
 }
 // Pagamentos do Clube na ficha, com "apagar" para corrigir registro feito por engano
 function pagamentosClubeHTML(cid){
-  const pags = D.lancamentos.filter(l=>l.tipo==='entrada' && l.cat==='Clube' && l.clienteId===cid).sort((a,b)=>b.data.localeCompare(a.data)).slice(0,6);
+  const pags = D.lancamentos.filter(l=>l.tipo==='entrada' && l.cat==='Clube' && l.clienteId===cid).sort(maisRecenteL).slice(0,6);
   if(!pags.length) return '';
   return `<div style="margin-top:8px;border-top:1px solid rgba(255,255,255,.15);padding-top:6px"><span class="pequeno"><b>Pagamentos</b></span>
     ${pags.map(l=>`<div class="linha entre pequeno" style="margin-top:4px"><span>${fmtData(l.data)} · ${brl(l.valor)} · ${esc(l.forma)}</span><button class="link pequeno" style="padding:0" onclick="apagarPagamentoClube('${l.id}','${cid}')">apagar</button></div>`).join('')}</div>`;
@@ -1750,7 +1754,7 @@ function telaClubeDono(){
 
 function clientesSumidos(){
   return D.clientes.map(c=>{
-    const ult = D.at.filter(a=>a.status==='entregue' && donoAt(a)===c.id).sort((a,b)=>b.data.localeCompare(a.data))[0];
+    const ult = D.at.filter(a=>a.status==='entregue' && donoAt(a)===c.id).sort(maisRecenteAt)[0];
     const futuro = D.at.some(a=>a.data>=iso(HOJE) && ['agendado','recebido','pronto'].includes(a.status) && donoAt(a)===c.id);
     return ult && !futuro ? {c, ult, dias:diasEntre(ult.data,iso(HOJE))} : null;
   }).filter(Boolean).sort((a,b)=>b.dias-a.dias);

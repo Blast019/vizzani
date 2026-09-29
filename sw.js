@@ -2,7 +2,7 @@
 // Deixa o app instalável e abre a tela mesmo com internet ruim.
 // Arquivos do app: tenta a rede primeiro (sempre a versão mais nova) e usa a cópia guardada se estiver sem conexão.
 // Dados (Supabase) nunca passam pelo cache.
-const VERSAO = 'vizzani-v3';
+const VERSAO = 'vizzani-v4';
 const ARQUIVOS = ['./', './index.html', './style.css', './script.js', './config.js', './logo.jpg',
   './icon-192.png', './icon-512.png', './manifest.webmanifest'];
 
@@ -19,8 +19,9 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
+  // no-cache: sempre confere com o servidor (o GitHub Pages manda guardar por 10 min e a versão nova demorava a chegar)
   e.respondWith(
-    fetch(req)
+    fetch(req, { cache: 'no-cache' })
       .then(resp => {
         if (resp.ok) { const copia = resp.clone(); caches.open(VERSAO).then(c => c.put(req, copia)); }
         return resp;
