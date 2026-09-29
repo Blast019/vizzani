@@ -2,7 +2,7 @@
 // Deixa o app instalável e abre a tela mesmo com internet ruim.
 // Arquivos do app: tenta a rede primeiro (sempre a versão mais nova) e usa a cópia guardada se estiver sem conexão.
 // Dados (Supabase) nunca passam pelo cache.
-const VERSAO = 'vizzani-v7';
+const VERSAO = 'vizzani-v8';
 const ARQUIVOS = ['./', './index.html', './style.css', './script.js', './config.js', './logo.jpg',
   './icon-192.png', './icon-512.png', './manifest.webmanifest'];
 
@@ -28,4 +28,25 @@ self.addEventListener('fetch', e => {
       })
       .catch(() => caches.match(req).then(r => r || caches.match('./index.html')))
   );
+});
+
+// Avisos no celular (Web Push): o servidor manda {titulo, corpo, url, tag}
+self.addEventListener('push', e => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch (_) { d = { corpo: e.data && e.data.text() }; }
+  e.waitUntil(self.registration.showNotification(d.titulo || 'Vizzani Estética', {
+    body: d.corpo || '', icon: './icon-192.png', badge: './icon-192.png',
+    tag: d.tag || undefined, renotify: !!d.tag, data: { url: d.url || './' },
+  }));
+});
+
+// Tocou no aviso: abre o app (ou traz para frente se já estiver aberto)
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  const alvo = new URL(e.notification.data?.url || './', self.registration.scope).href;
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(lista => {
+    const aberto = lista.find(c => c.url.startsWith(self.registration.scope));
+    if (aberto) { aberto.focus(); return aberto.navigate ? aberto.navigate(alvo).catch(() => {}) : null; }
+    return self.clients.openWindow(alvo);
+  }));
 });

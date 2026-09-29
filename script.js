@@ -171,6 +171,7 @@ async function aoMudarSessao(s){
   ag = {}; disp = {};
   try{ await carregar(); }catch(e){ console.error(e); aviso(msgErro(e)); }
   render();
+  if(perfil) renovarPush();
 }
 /* ---- App instalável (PWA) ---- */
 let pedidoInstalar = null;
@@ -882,6 +883,7 @@ function telaHoje(){
   ${D.pendencias.length?`<div class="info" style="margin-top:12px;cursor:pointer" onclick="irPara('balcao')">📝 ${D.pendencias.length} cadastro${D.pendencias.length>1?'s':''} de cliente para confirmar no Balcão.</div>`:''}
   ${clubeAtencao()?`<div class="info" style="margin-top:12px;cursor:pointer" onclick="subCli='clube';irPara('clientes')">⭐ ${clubeAtencao()} assinatura${clubeAtencao()>1?'s':''} do Clube precisa${clubeAtencao()>1?'m':''} de atenção (pedido para ativar ou mensalidade atrasada).</div>`:''}
   ${alertaEstoque()}
+  ${PUSH_PRONTO && !pushAtivo() ? `<div class="info" style="margin-top:12px">🔔 Receba no celular os avisos de novo agendamento, Pix para conferir, cancelamento e atraso, mesmo com o app fechado.${botaoAvisosEquipe('margin-top:8px')}</div>` : ''}
   ${painelPix()}
   ${painelNotifs()}
   ${painelLembretes()}
@@ -1078,18 +1080,51 @@ function painelLembretes(){
 }
 // Deixa o WhatsApp abrir primeiro e depois grava que o lembrete foi enviado
 function marcarLembrete(id){ setTimeout(()=>acao(()=>q(sb.from('atendimentos').update({lembrete_em:new Date().toISOString()}).eq('id',id)))); }
-// Notificações neste aparelho. O envio pelo servidor (Web Push + enviar-lembretes) ainda não existe:
-// enquanto PUSH_PRONTO for false, o app não oferece "Ativar lembretes" para não prometer aviso que não chega.
-const PUSH_PRONTO = false;
-const pushAtivo = () => { try{ return localStorage.getItem('vizzani-push')==='1' && 'Notification' in window && Notification.permission==='granted'; }catch(e){ return false; } };
-function ativarNotificacoes(){
-  const fim = ok => { try{ localStorage.setItem('vizzani-push', ok?'1':'0'); }catch(e){} aviso(ok?'Lembretes ativados neste celular.':'Notificações bloqueadas. Libere nas configurações do navegador.'); if(document.getElementById('modal').innerHTML) fecharModal(); render(); };
-  try{
-    if(!('Notification' in window)) return aviso('Este navegador não mostra notificações. No iPhone, instale o app na tela inicial primeiro.');
-    Notification.requestPermission().then(p=>{ fim(p==='granted'); if(p==='granted') try{ new Notification('Vizzani Estética',{body:'Pronto! Você vai receber os lembretes dos seus horários aqui.'}); }catch(e){} });
-  }catch(e){ aviso('Não foi possível ativar as notificações.'); }
+// Avisos no celular (Web Push, grátis): o app inscreve este aparelho e o servidor (Edge Function enviar-push) manda
+// lembretes de horário (24 h e 2 h antes), recados da loja e "carro pronto" para o cliente, e os avisos do painel para a equipe.
+const PUSH_PRONTO = !!window.VIZZANI_CONFIG.vapidPublicKey;
+const suportaPush = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const chavePush = () => 'vizzani-push-' + (perfil?.id || '');
+const pushAtivo = () => { try{ return suportaPush() && Notification.permission==='granted' && localStorage.getItem(chavePush())==='1'; }catch(e){ return false; } };
+function b64uParaBytes(s){ const b = atob((s + '='.repeat((4 - s.length % 4) % 4)).replace(/-/g,'+').replace(/_/g,'/')); return Uint8Array.from(b, c=>c.charCodeAt(0)); }
+async function inscreverPush(){
+  const reg = await navigator.serviceWorker.ready;
+  let sub = await reg.pushManager.getSubscription();
+  if(!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly:true, applicationServerKey:b64uParaBytes(window.VIZZANI_CONFIG.vapidPublicKey) });
+  const j = sub.toJSON();
+  await q(sb.rpc('salvar_push', {p_endpoint:j.endpoint, p_p256dh:j.keys.p256dh, p_auth:j.keys.auth}));
+  try{ localStorage.setItem(chavePush(), '1'); }catch(e){}
 }
-function modalLembretes(id){
+async function ativarNotificacoes(){
+  if(!suportaPush()) return aviso(ehIphone() && !appInstalado() ? 'No iPhone, primeiro coloque o app na tela inicial (Compartilhar → Adicionar à Tela de Início) e abra por lá.' : 'Este navegador não recebe avisos. Use o Chrome (Android) ou o app instalado na tela inicial (iPhone).');
+  try{
+    const p = await Notification.requestPermission();
+    if(p!=='granted') return aviso('Avisos bloqueados. Libere as notificações da Vizzani nas configurações do celular.');
+    carregando(true);
+    await inscreverPush();
+    aviso(ehEquipe() ? 'Avisos ativados neste celular.' : 'Pronto! Você recebe os lembretes dos seus horários neste celular.');
+    if(document.getElementById('modal').innerHTML) fecharModal();
+    render();
+  }catch(e){ console.error(e); aviso('Não foi possível ativar os avisos. Tente de novo.'); }
+  finally{ carregando(false); }
+}
+// A cada entrada, renova a inscrição deste celular (as chaves do navegador podem mudar)
+async function renovarPush(){ try{ if(PUSH_PRONTO && pushAtivo()) await inscreverPush(); }catch(e){ console.error(e); } }
+// Ao sair: este celular para de receber os avisos desta conta
+async function desligarPush(){
+  try{
+    if(!suportaPush()) return;
+    const reg = await navigator.serviceWorker.getRegistration(), sub = await reg?.pushManager.getSubscription();
+    if(sub) await sb.rpc('remover_push', {p_endpoint:sub.endpoint});
+    localStorage.removeItem(chavePush());
+  }catch(e){ console.error(e); }
+}
+// Botão para a equipe (Hoje, Ajustes, Conta)
+function botaoAvisosEquipe(estilo=''){
+  if(!PUSH_PRONTO) return '';
+  return pushAtivo() ? `<p class="mudo pequeno" style="${estilo}">🔔 Avisos ativados neste celular.</p>`
+    : `<button class="btn sec bloco" style="${estilo}" onclick="ativarNotificacoes()"><span>🔔 Receber avisos neste celular</span></button>`;
+}function modalLembretes(id){
   const c = {push: pushAtivo()};
   abrirModal(`<h2 style="margin-top:0">Agendado! ✅</h2><p class="sub">${esc(descAt(D.at.find(x=>x.id===id)))}</p>
     <p style="margin:14px 0 8px"><b>Não esqueça do horário:</b></p>
@@ -1986,6 +2021,7 @@ function telaAjustes(){
   <div class="traco">SUA CONTA</div><div class="painel">
     <p class="mudo pequeno" style="margin-top:0">Entrou como ${esc(sessao?.user?.email||'')}.</p>
     <button class="btn sec bloco" onclick="modalNovaSenha()"><span>Trocar minha senha</span></button>
+    ${botaoAvisosEquipe('margin-top:8px')}
     ${botaoInstalar()}
     ${suporte?`<button class="btn bloco" style="margin-top:8px" onclick="irPara('licenca')"><span>🔑 Licença do sistema (suporte)</span></button>`:''}
   </div>
@@ -2052,6 +2088,7 @@ function telaConta(){
   return `<div style="margin-top:18px"><h1>Conta</h1><p class="sub">${esc(perfil?.nome||'')} · equipe da Vizzani</p></div>
     <div class="painel" style="margin-top:16px">
       <button class="btn sec bloco" onclick="modalNovaSenha()"><span>Trocar minha senha</span></button>
+      ${botaoAvisosEquipe('margin-top:8px')}
       ${botaoInstalar()}
       <button class="btn sec bloco" style="margin-top:8px" onclick="sair()"><span>Sair</span></button>
     </div>
@@ -2295,6 +2332,7 @@ async function entrarCom(email, senha){
 }
 async function sair(){
   if(!confirm('Sair da sua conta neste aparelho?')) return;
+  await desligarPush();
   await sb.auth.signOut();
   ent = ENT_VAZIO(); await aoMudarSessao(null);
 }
