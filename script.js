@@ -57,7 +57,7 @@ async function carregar(){
   // Licença do sistema (mensalidade): vencida, o servidor para de liberar dados; aqui só mostramos o aviso certo
   try{ licenca = (await q(sb.rpc('licenca_status')))[0] || null; }catch(e){ licenca = null; }
   if(suporte){ try{ painelLic = (await q(sb.rpc('licenca_painel')))[0] || null; }catch(e){ painelLic = null; } }
-  const dono = perfil?.papel === 'dono';
+  const dono = perfil?.papel === 'dono', equipe = dono || perfil?.papel === 'funcionario';
   const [cfg, exp, servs, bloqs] = await Promise.all([
     q(sb.from('config').select('*').eq('id', 1).single()),
     q(sb.from('expediente').select('*').order('dia_semana')),
@@ -75,27 +75,35 @@ async function carregar(){
       antecedencia: Number(cfg.antecedencia_h), prazoCancelar: Number(cfg.prazo_cancelar_h), diasAgenda: cfg.dias_agenda,
       fotosDepois: cfg.fotos_depois, baixaAuto: cfg.baixa_auto_estoque,
     },
-    servicos: servs.filter(s => s.ativo || dono).map(s => ({ id: s.id, nome: s.nome, dur: s.duracao_min, precos: { carro: num(s.preco_carro), suv: num(s.preco_suv), moto: num(s.preco_moto) },
+    servicos: servs.filter(s => s.ativo || equipe).map(s => ({ id: s.id, nome: s.nome, dur: s.duracao_min, precos: { carro: num(s.preco_carro), suv: num(s.preco_suv), moto: num(s.preco_moto) },
       apartir: s.a_partir_de, lavagem: s.lavagem, noClube: s.no_clube ?? s.lavagem, destaque: s.destaque, inclui: s.inclui || '' })),
     bloqueios: bloqs.map(b => ({ id: b.id, data: b.data, diaTodo: b.dia_todo, ini: hm(b.inicio) || '00:00', fim: hm(b.fim) || '23:59', motivo: b.motivo })),
     clientes: [], veiculos: [], at: [], pendencias: [], avisos: {}, clube: {}, resgatesPts: {}, recados: [], notifs: [],
-    lancamentos: [], produtos: [], estoqueMov: [],
+    lancamentos: [], produtos: [], estoqueMov: [], equipe: [], profissionais: [], clubeMeses: null,
   };
   if(!perfil){ D = N; return; }
 
   let consultaAt = sb.from('atendimentos').select('*, vistorias(*), fotos(id,caminho,momento,criada_em)').order('data').order('hora');
-  if(dono) consultaAt = consultaAt.gte('data', iso(addDias(HOJE, -400)));
+  if(equipe) consultaAt = consultaAt.gte('data', iso(addDias(HOJE, -400)));
   const base = [
     q(consultaAt), q(sb.from('clientes').select('*')), q(sb.from('veiculos').select('*')),
     q(sb.from('pendencias').select('*')), q(sb.from('clube_assinaturas').select('*')), q(sb.from('resgates').select('cliente_id,pontos')),
   ];
-  const extra = dono ? [
+  // Equipe (dono e funcionário): operação. Dinheiro e custos só o dono lê; o funcionário recebe estoque e Clube sem valores.
+  const talvez = p => q(p).catch(e => { console.error(e); return []; });   // tabelas/funções novas: não derrubam o app se o SQL ainda não rodou
+  const extra = equipe ? [
     q(sb.from('avisos_retorno').select('*')),
     q(sb.from('notificacoes_dono').select('*').or(`lido_em.is.null,criado_em.gte.${addDias(HOJE, -30).toISOString()}`).order('criado_em', { ascending: false })),
-    q(sb.from('lancamentos').select('*').gte('data', iso(addDias(HOJE, -400)))),
-    q(sb.from('produtos').select('*, produto_consumo(servico_id,qtd)').eq('ativo', true).order('nome')),
-    q(sb.from('estoque_movimentos').select('*').gte('criado_em', addDias(HOJE, -90).toISOString()).order('criado_em', { ascending: false })),
-    q(sb.from('perfis').select('cliente_id').not('cliente_id', 'is', null)),
+    q(sb.from('perfis').select('*')),
+    talvez(sb.from('profissionais').select('*').order('nome')),
+    ...(dono ? [
+      q(sb.from('lancamentos').select('*').gte('data', iso(addDias(HOJE, -400)))),
+      q(sb.from('produtos').select('*, produto_consumo(servico_id,qtd)').eq('ativo', true).order('nome')),
+      q(sb.from('estoque_movimentos').select('*').gte('criado_em', addDias(HOJE, -90).toISOString()).order('criado_em', { ascending: false })),
+    ] : [
+      talvez(sb.rpc('estoque_equipe')),
+      talvez(sb.rpc('clube_meses_pagos')),
+    ]),
   ] : [
     q(sb.from('recados').select('*').order('criado_em', { ascending: false }).limit(30)),
   ];
@@ -110,27 +118,36 @@ async function carregar(){
       pago: a.pago, forma: a.forma_pagto, sinal: a.sinal, sinalStatus: a.sinal_status, sinalDevolvido: !!a.sinal_devolvido_em,
       clube: a.clube, chuva: a.chuva, resgate: a.resgate, pontos: a.pontos, origem: a.origem, atraso: a.atraso_min,
       remarcadoDe: a.remarcado_de, canceladoPor: a.cancelado_por, motivoCancel: a.motivo_cancel, nota: a.nota, comentario: a.comentario,
-      lembrete: a.lembrete_em, confirmado: a.confirmado, entregueEm: a.entregue_em,
+      lembrete: a.lembrete_em, confirmado: a.confirmado, entregueEm: a.entregue_em, profissionalId: a.profissional_id || null,
       vistoria: v ? { avarias: v.avarias || [], obs: v.obs || '', ciente: v.ciente, quando: v.quando, manter: v.manter,
         fotos: fotos.filter(f => f.momento === 'antes'), fotosApagadas: v.fotos_apagadas_qtd } : null,
       depois: fotos.some(f => f.momento === 'depois') ? { fotos: fotos.filter(f => f.momento === 'depois') } : (a.fotos_depois_apagadas_em ? { fotos: [], apagadas: true } : null),
     };
   });
-  const comLogin = dono ? new Set(outros[5].map(p => p.cliente_id)) : new Set([perfil.cliente_id]);
+  const comLogin = equipe ? new Set(outros[2].filter(p => p.cliente_id).map(p => p.cliente_id)) : new Set([perfil.cliente_id]);
   N.clientes = clis.map(c => ({ id: c.id, nome: c.nome, fone: c.fone, consente: c.consente, temLogin: comLogin.has(c.id), criadoPeloApp: c.criado_pelo_app, criadoEm: c.criado_em }));
   N.veiculos = veics.map(v => ({ placa: v.placa, modelo: v.modelo, porte: v.porte, clienteId: v.cliente_id }));
   N.pendencias = pends.map(p => ({ id: p.id, placa: p.placa, modelo: p.modelo, porte: p.porte, clienteId: p.cliente_id, quando: p.criado_em }));
   clubes.forEach(c => N.clube[c.cliente_id] = { desde: c.desde, porte: c.porte, ativo: c.ativo, pendente: !c.ativo && !c.cancelado_em });
   resg.forEach(r => N.resgatesPts[r.cliente_id] = (N.resgatesPts[r.cliente_id] || 0) + r.pontos);
-  if(dono){
-    const [avisos, notifs, lancs, prods, movs] = outros;
+  if(equipe){
+    const [avisos, notifs, perfis, profs] = outros;
     avisos.sort((a,b) => a.enviado_em.localeCompare(b.enviado_em)).forEach(x => (N.avisos[x.cliente_id] = N.avisos[x.cliente_id] || []).push(dataLocal(x.enviado_em)));
     N.notifs = notifs.map(x => ({ id: x.id, texto: x.texto, atId: x.atendimento_id, quando: x.criado_em, lido: !!x.lido_em }));
-    N.lancamentos = lancs.map(l => ({ id: l.id, data: l.data, tipo: l.tipo, desc: l.descricao, cat: l.categoria, valor: Number(l.valor), forma: l.forma,
-      pessoa: l.pessoa || '', detalhes: l.detalhes || '', clienteId: l.cliente_id, criadoEm: l.criado_em }));
-    N.produtos = prods.map(p => ({ id: p.id, nome: p.nome, un: p.unidade, qtd: Number(p.qtd), min: Number(p.minimo), custo: Number(p.custo),
-      consumo: Object.fromEntries((p.produto_consumo || []).map(c => [c.servico_id, Number(c.qtd)])) }));
-    N.estoqueMov = movs.map(m => ({ id: m.id, produtoId: m.produto_id, data: dataLocal(m.criado_em), quando: m.criado_em, tipo: m.tipo, qtd: Number(m.qtd), obs: m.obs, valor: num(m.valor) }));
+    N.equipe = perfis.filter(p => p.papel === 'funcionario').map(p => ({ id: p.id, nome: p.nome || '', fone: p.fone || '', ativo: p.ativo !== false }));
+    N.profissionais = profs.map(p => ({ id: p.id, nome: p.nome, perfilId: p.perfil_id, ativo: p.ativo }));
+    if(dono){
+      const [lancs, prods, movs] = outros.slice(4);
+      N.lancamentos = lancs.map(l => ({ id: l.id, data: l.data, tipo: l.tipo, desc: l.descricao, cat: l.categoria, valor: Number(l.valor), forma: l.forma,
+        pessoa: l.pessoa || '', detalhes: l.detalhes || '', clienteId: l.cliente_id, criadoEm: l.criado_em }));
+      N.produtos = prods.map(p => ({ id: p.id, nome: p.nome, un: p.unidade, qtd: Number(p.qtd), min: Number(p.minimo), custo: Number(p.custo),
+        consumo: Object.fromEntries((p.produto_consumo || []).map(c => [c.servico_id, Number(c.qtd)])) }));
+      N.estoqueMov = movs.map(m => ({ id: m.id, produtoId: m.produto_id, data: dataLocal(m.criado_em), quando: m.criado_em, tipo: m.tipo, qtd: Number(m.qtd), obs: m.obs, valor: num(m.valor) }));
+    } else {
+      const [prods, meses] = outros.slice(4);
+      N.produtos = prods.map(p => ({ id: p.id, nome: p.nome, un: p.unidade, qtd: Number(p.qtd), min: Number(p.minimo), custo: 0, consumo: {} }));
+      N.clubeMeses = Object.fromEntries(meses.map(m => [m.cliente_id, m.meses]));
+    }
   } else {
     N.recados = outros[0].map(r => ({ id: r.id, clienteId: r.cliente_id, atId: r.atendimento_id, texto: r.texto, quando: r.criado_em, lido: !!r.lido_em }));
     // Situação do Clube do próprio cliente (vem do servidor, porque o cliente não lê o caixa)
@@ -148,8 +165,8 @@ async function aoMudarSessao(s){
     // 1º login do dono da loja: começa o período de teste grátis (logins do suporte não contam)
     if(perfil.papel === 'dono' && !suporte){ try{ await q(sb.rpc('iniciar_licenca')); }catch(e){ console.error(e); } }
   }
-  modo = perfil?.papel === 'suporte' ? 'suporte' : perfil?.papel === 'dono' ? 'dono' : 'cliente';
-  aba = modo === 'dono' ? 'hoje' : modo === 'suporte' ? 'licenca' : 'inicio';
+  modo = ['suporte','dono','funcionario'].includes(perfil?.papel) ? perfil.papel : 'cliente';
+  aba = ehEquipe() ? 'hoje' : modo === 'suporte' ? 'licenca' : 'inicio';
   clienteAtual = perfil?.cliente_id || null;
   ag = {}; disp = {};
   try{ await carregar(); }catch(e){ console.error(e); aviso(msgErro(e)); }
@@ -340,11 +357,21 @@ function dispCliente(dur, ignorar, redesenhar){
 }
 const ABAS = {
   cliente:[['inicio','Início','casa'],['agendar','Agendar','agenda'],['historico','Histórico','hist'],['clube','Clube','estrela']],
-  dono:[['hoje','Hoje','painel'],['agenda','Agenda','agenda'],['balcao','Balcão','balcao'],['caixa','Caixa','caixa'],['clientes','Clientes','pessoas'],['ajustes','Ajustes','ajuste']]
+  dono:[['hoje','Hoje','painel'],['agenda','Agenda','agenda'],['balcao','Balcão','balcao'],['caixa','Caixa','caixa'],['clientes','Clientes','pessoas'],['ajustes','Ajustes','ajuste']],
+  // Funcionário: a operação toda, sem dinheiro (Caixa vira só Estoque) e sem Ajustes (vira "Conta")
+  funcionario:[['hoje','Hoje','painel'],['agenda','Agenda','agenda'],['balcao','Balcão','balcao'],['estoque','Estoque','caixa'],['clientes','Clientes','pessoas'],['conta','Conta','ajuste']]
 };
+// Equipe = dono ou funcionário. Dinheiro, custos e Ajustes: só o dono (o servidor também bloqueia).
+const ehEquipe = () => modo==='dono' || modo==='funcionario';
+const souDono = () => modo==='dono';
+// Profissional ligado a quem está logado (padrão do "quem fez o serviço")
+const meuProfissional = () => D.profissionais.find(p=>p.perfilId===perfil?.id && p.ativo)?.id || null;
+const nomeProfissional = id => D.profissionais.find(p=>p.id===id)?.nome || '';
 function irPara(a){ aba=a; render(); window.scrollTo({top:0}); }
 function telaBloqueada(){
   const dono = perfil?.papel==='dono', l = licenca || {};
+  if(modo==='funcionario') return `<div class="painel" style="margin-top:30px"><h2 style="margin-top:0">Sistema suspenso</h2>
+    <p class="sub">O app da loja está temporariamente fora do ar. Fale com o dono.</p></div>`;
   return dono
     ? `<div class="painel" style="margin-top:30px;border-color:#8a2424"><h2 style="margin-top:0">Acesso suspenso</h2>
         <p class="sub">A mensalidade do sistema está em aberto${l.pago_ate?' desde '+fmtData(l.pago_ate):''}. Seus dados continuam guardados e o acesso volta assim que o pagamento for confirmado.</p>
@@ -432,7 +459,7 @@ function render(){
     document.getElementById('tela').innerHTML = telaBloqueada();
     return;
   }
-  const logado = !!sessao && (modo==='dono' || !!cliente(clienteAtual));
+  const logado = !!sessao && (ehEquipe() || !!cliente(clienteAtual));
   if(!logado){
     document.querySelector('.nav').style.display='none';
     document.getElementById('tela').innerHTML = sessao && perfil ? `<div class="painel vazio" style="margin-top:30px">Esta conta ainda não está ligada a um cadastro de cliente. Fale com a Vizzani.<br><button class="btn sec" style="margin-top:12px" onclick="sair()"><span>Sair</span></button></div>` : telaEntrar();
@@ -440,7 +467,9 @@ function render(){
   }
   document.querySelector('.nav').style.display='';
   document.getElementById('nav').innerHTML = ABAS[modo].map(([id,rot,ic])=>`<button class="${aba===id?'on':''}" onclick="irPara('${id}')" aria-current="${aba===id?'page':'false'}">${ICON[ic]}${rot}</button>`).join('');
-  const f = {inicio:telaInicio,agendar:telaAgendar,historico:telaHistorico,clube:telaClube,hoje:telaHoje,agenda:telaAgendaDono,balcao:telaBalcao,caixa:telaCaixa,clientes:telaClientes,retorno:telaClientes,ajustes:telaAjustes,licenca:telaLicenca}[aba] || (modo==='dono'?telaHoje:telaInicio);
+  const f = {inicio:telaInicio,agendar:telaAgendar,historico:telaHistorico,clube:telaClube,hoje:telaHoje,agenda:telaAgendaDono,balcao:telaBalcao,caixa:telaCaixa,clientes:telaClientes,retorno:telaClientes,ajustes:telaAjustes,licenca:telaLicenca,estoque:telaEstoque,conta:telaConta}[aba] || (ehEquipe()?telaHoje:telaInicio);
+  // Funcionário nunca abre Caixa nem Ajustes (mesmo por link ou botão antigo)
+  if(modo==='funcionario' && ['caixa','ajustes','licenca'].includes(aba)){ aba = aba==='caixa' ? 'estoque' : 'conta'; return render(); }
   document.getElementById('tela').innerHTML = avisoLicenca() + f();
 }
 /* ================= CLIENTE ================= */
@@ -783,8 +812,8 @@ function telaHoje(){
   const semRetorno = clientesSumidos().filter(x=>x.dias>=30).length;
   let h = `<div style="margin-top:18px"><h1>Hoje</h1><p class="sub">${d.charAt(0).toUpperCase()+d.slice(1)}</p></div>
   <div class="kpis" style="margin-top:16px">
-    <div class="kpi destaque"><b>${brl(previsto)}</b><span>previstos hoje · ${brl(recebido)} já recebidos</span></div>
-    <div class="kpi"><b>${ativos.length}</b><span>carros na agenda</span></div>
+    ${souDono()?`<div class="kpi destaque"><b>${brl(previsto)}</b><span>previstos hoje · ${brl(recebido)} já recebidos</span></div>
+    <div class="kpi"><b>${ativos.length}</b><span>carros na agenda</span></div>`:`<div class="kpi destaque"><b>${ativos.length}</b><span>carros na agenda hoje</span></div>`}
     <div class="kpi"><b>${n('recebido')}</b><span>em atendimento</span></div>
     <div class="kpi"><b>${n('pronto')}</b><span>prontos p/ retirada</span></div>
     <div class="kpi" onclick="subCli='retorno';irPara('clientes')" role="button" style="border-color:${semRetorno?'#8a6510':'var(--linha)'}"><b>${semRetorno}</b><span>clientes sumidos (30+ dias)</span></div>
@@ -817,6 +846,8 @@ async function mudar(id,st){
   if(st==='recebido'){ abrirVistoria(id); return; }
   const a = D.at.find(x=>x.id===id), campos = {status:st};
   if(st==='faltou' && a.sinal) campos.sinal_status = 'retido';
+  // Quem fez: ao marcar Pronto, fica quem está logado (dá para trocar na entrega)
+  if(st==='pronto' && !a.profissionalId && meuProfissional()) campos.profissional_id = meuProfissional();
   const ok = await acao(()=>q(sb.from('atendimentos').update(campos).eq('id',id)), st==='faltou'?'Registrado como falta.':null);
   if(ok===false) return;
   if(st==='pronto') return D.config.fotosDepois ? abrirDepois(id) : avisarPronto(id);
@@ -890,7 +921,7 @@ function entregar(id){
   const a = D.at.find(x=>x.id===id), s = servico(a.servicoId), cid = donoAt(a);
   const gratis = a.clube || a.chuva;                     // lavagem do Clube ou relavagem de chuva: não se cobra o serviço
   const descClube = !gratis && noClube(cid) && !s.noClube && a.valor>0 ? 10 : 0;   // 10% nos serviços fora do Clube
-  entrega = {id, valor:gratis?0:a.valor, extra:0, extraDesc:'', desconto:descClube, resgate:false, gratis};
+  entrega = {id, valor:gratis?0:a.valor, extra:0, extraDesc:'', desconto:descClube, resgate:false, gratis, prof:a.profissionalId || meuProfissional() || ''};
   desenharEntrega();
 }
 function totalEntrega(){
@@ -904,6 +935,7 @@ function desenharEntrega(){
   const podeResgatar = !e.gratis && s.id==='simples' && pontosDe(cid) >= D.config.pontosResgate;
   abrirModal(`<h2 style="margin-top:0">Entregar${e.gratis?'':' e receber'}</h2>
     <div class="linha entre">${placaHTML(a.placa)}<b>${esc(s.nome)}</b></div>
+    ${seletorProfissional(e.prof, 'entrega.prof=this.value')}
     ${e.gratis
       ? `<div class="info" style="margin-top:14px">${a.clube?'⭐ Lavagem do Clube':'☔ Relavagem da garantia de chuva'}: <b>o serviço não é cobrado</b>. Só cobre se houver algum extra.</div>`
       : `<label class="campo" style="margin-top:14px">Valor do serviço${s.apartir?' (preço "a partir de": ajuste se precisou)':''}<input type="number" step="0.01" inputmode="decimal" value="${e.valor}" oninput="entrega.valor=this.value;atualizarTotalEntrega()" ${e.resgate?'disabled':''}></label>`}
@@ -934,13 +966,14 @@ async function finalizar(id,forma){
   const campos = { status:'entregue', pago:true, forma_pagto:forma, valor:total, valor_tabela:a.valorTabela ?? a.valor,
     desconto_pct:e.desconto, extra_desc: extra ? (e.extraDesc.trim()||'Extra') : null, extra_valor: extra || null,
     resgate:!!e.resgate, pontos };
+  if(D.profissionais.length) campos.profissional_id = e.prof || null;
   // Se o total ficou abaixo do sinal (ex.: resgate de pontos), o sinal é devolvido ou fica como parte do pagamento
   if(sinal && total < sinal) campos.sinal_status = e.resgate ? 'devolvido' : 'usado';
   entrega = null; fecharModal();
   const ok = await acao(async()=>{
     await q(sb.from('atendimentos').update(campos).eq('id',id));
     if(e.resgate) await q(sb.from('resgates').insert({cliente_id:cid, atendimento_id:id, pontos:D.config.pontosResgate}));
-    await baixaEstoque(a);
+    await baixaEstoque(id);
   });
   if(ok!==false) aviso(e.resgate?'Entregue. Lavagem grátis resgatada.':!forma?'Entregue sem cobrança.':`Entregue e pago no ${forma}. ${pontos} pontos creditados.`);
 }
@@ -1348,39 +1381,47 @@ async function movEstoque(p, tipo, qtd, obs, valor, extra={}){
   await q(sb.from('estoque_movimentos').insert({produto_id:p.id, tipo, qtd:r3(qtd), obs:obs||null, valor:valor||null, atendimento_id:extra.atId||null}));
   await q(sb.from('produtos').update({qtd:Math.max(0, r3(p.qtd+qtd)), ...(extra.custo?{custo:extra.custo}:{})}).eq('id',p.id));
 }
-async function baixaEstoque(a){
+// Baixa pelo consumo de cada serviço: feita no servidor (vale para dono e funcionário; não repete)
+async function baixaEstoque(atId){
   if(!D.config.baixaAuto) return;
-  for(const p of D.produtos){ const c = Number(p.consumo?.[a.servicoId])||0; if(c>0) await movEstoque(p,'uso',-c,`${servico(a.servicoId).nome} · ${a.placa}`,null,{atId:a.id}); }
+  await q(sb.rpc('baixa_estoque', {p_atendimento:atId}));
+}
+// "Quem fez o serviço": só aparece se houver profissionais cadastrados (só a loja vê)
+function seletorProfissional(atual, onchange){
+  const ps = D.profissionais.filter(p=>p.ativo || p.id===atual);
+  if(!ps.length) return '';
+  return `<label class="campo" style="margin-top:14px">Quem fez o serviço<select onchange="${onchange}"><option value="">—</option>${ps.map(p=>`<option value="${p.id}" ${p.id===atual?'selected':''}>${esc(p.nome)}</option>`).join('')}</select></label>`;
 }
 function alertaEstoque(){
   const b = produtosBaixos(); if(!b.length) return '';
-  return `<div class="erro" style="margin-top:12px;cursor:pointer" onclick="subCaixa='estoque';irPara('caixa')" role="button">⚠ ${b.length} produto${b.length>1?'s':''} acabando: ${b.map(p=>esc(p.nome)).join(', ')}. Toque para ver o estoque.</div>`;
+  return `<div class="erro" style="margin-top:12px;cursor:pointer" onclick="${souDono()?"subCaixa='estoque';irPara('caixa')":"irPara('estoque')"}" role="button">⚠ ${b.length} produto${b.length>1?'s':''} acabando: ${b.map(p=>esc(p.nome)).join(', ')}. Toque para ver o estoque.</div>`;
 }
 function telaEstoque(){
   const baixos = produtosBaixos(), valor = D.produtos.reduce((s,p)=>s+p.qtd*(p.custo||0),0);
   const mes = iso(HOJE).slice(0,7), usado = D.estoqueMov.filter(m=>m.tipo==='uso' && m.data.slice(0,7)===mes).reduce((s,m)=>{ const p = D.produtos.find(x=>x.id===m.produtoId); return s + (p? -m.qtd*(p.custo||0) : 0); },0);
-  let h = `<div style="margin-top:18px"><h1>Caixa</h1><p class="sub">Produtos, compras e consumo.</p></div>${abasCaixa()}
-    <div class="kpis" style="margin-top:12px">
+  const dono = souDono();
+  let h = (dono ? `<div style="margin-top:18px"><h1>Caixa</h1><p class="sub">Produtos, compras e consumo.</p></div>${abasCaixa()}` : `<div style="margin-top:18px"><h1>Estoque</h1><p class="sub">Registre o que usou fora de um serviço ou o que perdeu. O gasto de cada serviço sai sozinho na entrega.</p></div>`)
+    + `<div class="kpis" style="margin-top:12px">
       <div class="kpi"><b>${D.produtos.length}</b><span>produtos</span></div>
       <div class="kpi" style="border-color:${baixos.length?'#8a2424':'var(--linha)'}"><b class="${baixos.length?'sai':''}">${baixos.length}</b><span>abaixo do mínimo</span></div>
-      <div class="kpi"><b>${brl(valor)}</b><span>parado em estoque</span></div>
-      <div class="kpi"><b>${brl(usado)}</b><span>gasto em produto no mês</span></div>
+      ${dono?`<div class="kpi"><b>${brl(valor)}</b><span>parado em estoque</span></div>
+      <div class="kpi"><b>${brl(usado)}</b><span>gasto em produto no mês</span></div>`:''}
     </div>
     <div class="grade" style="grid-template-columns:1fr 1fr;margin-top:12px">
-      <button class="btn peq" onclick="editarProduto()"><span>+ Novo produto</span></button>
+      ${dono?`<button class="btn peq" onclick="editarProduto()"><span>+ Novo produto</span></button>`:''}
       <a class="btn sec peq" style="text-decoration:none" target="_blank" rel="noopener" href="https://api.whatsapp.com/send?text=${encodeURIComponent('Lista de compras Vizzani:\n'+(baixos.length?baixos:D.produtos).map(p=>'- '+p.nome+' (tenho '+fmtQtd(p)+', mínimo '+fmtQtd(p,p.min)+')').join('\n'))}"><span>Lista de compras</span></a>
     </div>
-    <label class="check" style="margin-top:12px"><input type="checkbox" ${D.config.baixaAuto?'checked':''} onchange="salvarConfig({baixa_auto_estoque:this.checked})"> Dar baixa sozinho ao entregar o carro (pelo consumo de cada serviço)</label>
+    ${dono?`<label class="check" style="margin-top:12px"><input type="checkbox" ${D.config.baixaAuto?'checked':''} onchange="salvarConfig({baixa_auto_estoque:this.checked})"> Dar baixa sozinho ao entregar o carro (pelo consumo de cada serviço)</label>`:''}
     <div class="traco">PRODUTOS</div>`;
   if(!D.produtos.length) h += `<div class="painel vazio">Nenhum produto cadastrado.</div>`;
   [...D.produtos].sort((a,b)=>(a.qtd<=a.min?0:1)-(b.qtd<=b.min?0:1) || a.nome.localeCompare(b.nome)).forEach(p=>{
     const baixo = p.qtd<=p.min, pct = Math.min(100, p.qtd/Math.max(p.min*2,0.001)*100);
     const cons = Object.entries(p.consumo||{}).filter(([,q])=>q>0).map(([sid,q])=>`${servico(sid)?.nome||sid}: ${fmtQtd(p,q)}`).join(' · ');
     h += `<div class="painel"${baixo?' style="border-color:#8a2424"':''}><div class="linha entre"><b>${esc(p.nome)}</b>${baixo?'<span class="selo vermelho">⚠ acabando</span>':'<span class="selo verde">ok</span>'}</div>
-      <div class="linha entre" style="margin-top:6px"><span class="valor">${fmtQtd(p)}</span><span class="mudo pequeno">mínimo ${fmtQtd(p,p.min)}${p.custo?' · '+brl(p.custo)+'/'+p.un:''}</span></div>
+      <div class="linha entre" style="margin-top:6px"><span class="valor">${fmtQtd(p)}</span><span class="mudo pequeno">mínimo ${fmtQtd(p,p.min)}${dono&&p.custo?' · '+brl(p.custo)+'/'+p.un:''}</span></div>
       <div class="barra"><i style="width:${pct}%;${baixo?'background:var(--erro)':''}"></i></div>
       ${cons?`<div class="mudo pequeno">Gasta por serviço: ${esc(cons)}</div>`:''}
-      <div class="acoes"><button class="btn peq" onclick="abrirCompra('${p.id}')"><span>+ Compra</span></button><button class="btn sec peq" onclick="abrirUso('${p.id}')"><span>− Uso/perda</span></button><button class="btn sec peq" onclick="editarProduto('${p.id}')"><span>Editar</span></button></div></div>`;
+      <div class="acoes">${dono?`<button class="btn peq" onclick="abrirCompra('${p.id}')"><span>+ Compra</span></button>`:''}<button class="btn sec peq" onclick="abrirUso('${p.id}')"><span>− Uso/perda</span></button>${dono?`<button class="btn sec peq" onclick="editarProduto('${p.id}')"><span>Editar</span></button>`:''}</div></div>`;
   });
   const ult = [...D.estoqueMov].sort((a,b)=>b.quando.localeCompare(a.quando)).slice(0,12);
   if(ult.length) h += `<div class="traco">ÚLTIMAS MOVIMENTAÇÕES</div><div class="painel">${ult.map(m=>{ const p = D.produtos.find(x=>x.id===m.produtoId); if(!p) return '';
@@ -1425,7 +1466,8 @@ function salvarUso(pid){
   if(!(qt>=0) || document.getElementById('eu-q').value==='') return aviso('Informe a quantidade.');
   if(t!=='ajuste' && !(qt>0)) return aviso('Informe a quantidade.');
   fecharModal();
-  return acao(()=> t==='ajuste' ? movEstoque(p,'ajuste',qt-p.qtd,obs) : movEstoque(p,t,-qt,obs), 'Estoque atualizado.');
+  // Uso, perda e ajuste passam pelo servidor (o funcionário não mexe direto na tabela de produtos)
+  return acao(()=>q(sb.rpc('estoque_mover', {p_produto:p.id, p_tipo:t, p_qtd: t==='ajuste' ? qt-p.qtd : -qt, p_obs:obs||null})), 'Estoque atualizado.');
 }
 function editarProduto(pid){
   const p = pid ? D.produtos.find(x=>x.id===pid) : {nome:'', un:'L', qtd:0, min:1, custo:0, consumo:{}};
@@ -1553,6 +1595,7 @@ async function atenderAgora(placa,sid,chuva,clube=false){
 /* Clube no balcão: o cliente pede pelo app (ou pessoalmente) e o dono ativa ao receber a mensalidade */
 function clubeBalcao(c, v){
   const cl = D.clube[c.id], porte = cl?.porte || (v.porte);
+  if(modo==='funcionario') return cl ? `<div class="painel" style="border-color:#2a45b8">${clubeFuncionarioHTML(c.id, statusClube(c.id))}</div>` : '';
   if(cl?.ativo) return `<div class="painel" style="border-color:#2a45b8"><div class="linha entre"><b>Clube ativo</b><span class="selo azul">desde ${fmtData(cl.desde)}</span></div>
     <p class="mudo pequeno" style="margin:6px 0 10px">Lavagens usadas/agendadas: ${resumoClube(c.id)} · ${brl(D.config.clubePrecos[porte])}/mês (${PORTES[porte]})</p>
     <div class="grade" style="grid-template-columns:1fr 1fr"><button class="btn peq" onclick="abrirMensalidade('${c.id}','${porte}',false)"><span>Registrar mensalidade</span></button><button class="btn sec peq" onclick="encerrarClube('${c.id}')"><span>Encerrar</span></button></div></div>`;
@@ -1613,7 +1656,8 @@ function statusClube(cid){
   if(!cl.ativo) return {tipo:'encerrado', porte:cl.porte};
   const ini = dataDe(cl.desde), preco = D.config.clubePrecos[cl.porte] || 1;
   const pags = D.lancamentos.filter(l=>l.tipo==='entrada' && l.cat==='Clube' && l.clienteId===cid && l.data>=iso(addDias(ini,-7))).sort(maisRecenteL);
-  const meses = pags.reduce((s,l)=>s + Math.max(1, Math.round(l.valor/preco)), 0);
+  // funcionário não lê o caixa: os meses pagos vêm do servidor, sem valores
+  const meses = D.clubeMeses ? (D.clubeMeses[cid]||0) : pags.reduce((s,l)=>s + Math.max(1, Math.round(l.valor/preco)), 0);
   const cobertoAte = venceNoMes(ini.getFullYear(), ini.getMonth()+meses, ini.getDate());   // próxima mensalidade a pagar
   return cobertoAte > HOJE
     ? {tipo:'em_dia', porte:cl.porte, desde:cl.desde, proximo:iso(cobertoAte), ultimo:pags[0], meses}
@@ -1660,7 +1704,7 @@ function listaClientesHTML(){
   lista.sort(ord);
   let h = `<div class="chips" style="margin-top:12px">${Object.entries(FILTROS_CLI).map(([k,[n]])=>`<button class="chip ${filtroCli===k?'on':''}" onclick="filtroCli='${k}';atualizarListaCli()">${n}<b>${cont(k)}</b></button>`).join('')}</div>
     <div class="linha entre" style="margin:8px 0"><span class="mudo pequeno">${lista.length} cliente${lista.length===1?'':'s'}</span>
-      <select onchange="ordemCli=this.value;atualizarListaCli()" style="background:var(--grafite);border:1px solid var(--linha);border-radius:8px;padding:6px 8px" aria-label="Ordenar">${[['recente','Último serviço'],['nome','Nome (A-Z)'],['gasto','Quem mais gastou']].map(([k,n])=>`<option value="${k}" ${ordemCli===k?'selected':''}>${n}</option>`).join('')}</select></div>
+      <select onchange="ordemCli=this.value;atualizarListaCli()" style="background:var(--grafite);border:1px solid var(--linha);border-radius:8px;padding:6px 8px" aria-label="Ordenar">${[['recente','Último serviço'],['nome','Nome (A-Z)'],...(souDono()?[['gasto','Quem mais gastou']]:[])].map(([k,n])=>`<option value="${k}" ${ordemCli===k?'selected':''}>${n}</option>`).join('')}</select></div>
     <div class="painel">`;
   if(!lista.length) h += `<div class="vazio">Ninguém encontrado.</div>`;
   lista.slice(0,200).forEach(({c,r})=>{
@@ -1670,7 +1714,7 @@ function listaClientesHTML(){
       <div><b>${esc(c.nome)}</b> ${seloClube} ${c.temLogin?'<span class="selo">app</span>':''}
         <div class="mudo pequeno">${fmtFone(c.fone)} · ${r.vs.map(v=>esc(v.placa)).join(', ')||'sem carro'}</div>
         <div class="mudo pequeno">${r.ult?`último: ${esc(servico(r.ult.servicoId)?.nome||'')} há ${r.dias} dia${r.dias===1?'':'s'}`:'nenhum serviço ainda'}${r.proximos.length?` · marcado ${fmtData(r.proximos[0].data)}`:''}</div></div>
-      <div style="text-align:right"><b>${brl(r.total)}</b><div class="mudo pequeno">${r.entregues.length} serv.</div></div></div>`;
+      <div style="text-align:right">${souDono()?`<b>${brl(r.total)}</b>`:''}<div class="mudo pequeno">${r.entregues.length} serv.</div></div></div>`;
   });
   if(lista.length>200) h += `<p class="mudo pequeno">Mostrando 200 de ${lista.length}. Use a busca para achar os outros.</p>`;
   return h + `</div>`;
@@ -1679,7 +1723,7 @@ function listaClientesHTML(){
 function abrirCliente(cid){
   const c = cliente(cid), r = resumoCliente(c), cl = r.clube;
   const linha = (rot, val) => val ? `<tr><td class="mudo">${rot}</td><td>${val}</td></tr>` : '';
-  const clubeHTML = !cl ? `<button class="link" onclick="fecharModal();abrirMensalidade('${cid}','${r.vs.map(v=>v.porte).find(p=>p!=='moto')||r.vs[0]?.porte||'carro'}',true)">Assinar o Clube para este cliente</button>`
+  const clubeHTML = modo==='funcionario' ? clubeFuncionarioHTML(cid, cl) : !cl ? `<button class="link" onclick="fecharModal();abrirMensalidade('${cid}','${r.vs.map(v=>v.porte).find(p=>p!=='moto')||r.vs[0]?.porte||'carro'}',true)">Assinar o Clube para este cliente</button>`
     : cl.tipo==='pendente' ? `<div class="info">Pediu para assinar o Clube.<button class="btn bloco" style="margin-top:8px" onclick="fecharModal();abrirMensalidade('${cid}','${cl.porte}',true)"><span>Ativar Clube</span></button></div>`
     : cl.tipo==='encerrado' ? `<p class="mudo pequeno">Clube encerrado. <button class="link" onclick="fecharModal();abrirMensalidade('${cid}','${cl.porte}',true)">Reativar</button></p>`
     : `<div class="${cl.tipo==='aberto'&&cl.atraso>0?'erro':'info'}"><b>Clube ${PORTES[cl.porte]} · ${brl(D.config.clubePrecos[cl.porte])}/mês</b><br>
@@ -1696,9 +1740,9 @@ function abrirCliente(cid){
       ${linha('Cliente desde', c.criadoEm?new Date(c.criadoEm).toLocaleDateString('pt-BR'):'')}
     </table>
     <div class="kpis" style="margin-top:12px">
-      <div class="kpi"><b>${brl(r.total)}</b><span>total gasto</span></div>
+      ${souDono()?`<div class="kpi"><b>${brl(r.total)}</b><span>total gasto</span></div>`:''}
       <div class="kpi"><b>${r.entregues.length}</b><span>serviços</span></div>
-      <div class="kpi"><b>${r.entregues.length?brl(r.entregues.reduce((s,a)=>s+a.valor,0)/r.entregues.length):'—'}</b><span>ticket médio</span></div>
+      ${souDono()?`<div class="kpi"><b>${r.entregues.length?brl(r.entregues.reduce((s,a)=>s+a.valor,0)/r.entregues.length):'—'}</b><span>ticket médio</span></div>`:''}
       <div class="kpi"><b>${r.pontos}</b><span>pontos${r.pontos>=D.config.pontosResgate?' · tem lavagem grátis':''}</span></div>
     </div>
     <div class="traco">CLUBE</div>${clubeHTML}
@@ -1706,8 +1750,8 @@ function abrirCliente(cid){
     ${r.vs.length?r.vs.map(v=>`<div class="linha entre" style="margin-bottom:8px">${placaHTML(v.placa,true)}<span class="pequeno">${esc(v.modelo)} · ${PORTES[v.porte]}</span><button class="btn sec peq" onclick="fecharModal();buscaPlaca='${v.placa}';irPara('balcao')"><span>Ficha</span></button></div>`).join(''):'<p class="mudo pequeno">Nenhum carro na conta.</p>'}
     ${r.proximos.length?`<div class="traco">AGENDADO</div>${r.proximos.map(a=>`<p class="pequeno" style="margin:4px 0">${esc(descAt(a))} · ${esc(a.placa)}</p>`).join('')}`:''}
     <div class="traco">HISTÓRICO</div>
-    ${r.entregues.length||r.avulsas.length?`<table class="tabela">${[...r.entregues.map(a=>({data:a.data, txt:esc(servico(a.servicoId)?.nome||'')+' · '+esc(a.placa)+(a.nota?' · '+'★'.repeat(a.nota):''), valor:a.valor, quando:quandoAt(a)})), ...r.avulsas.map(l=>({data:l.data, txt:esc(l.desc)+(l.detalhes?' · '+esc(l.detalhes):''), valor:l.valor, quando:+new Date(l.criadoEm)||0}))]
-      .sort((a,b)=>b.data.localeCompare(a.data) || b.quando-a.quando).slice(0,15).map(x=>`<tr><td class="mudo">${fmtData(x.data)}</td><td>${x.txt}</td><td style="text-align:right">${brl(x.valor)}</td></tr>`).join('')}</table>`:'<p class="mudo pequeno">Nenhum serviço ou compra ainda.</p>'}
+    ${r.entregues.length||r.avulsas.length?`<table class="tabela">${[...r.entregues.map(a=>({data:a.data, txt:esc(servico(a.servicoId)?.nome||'')+' · '+esc(a.placa)+(a.profissionalId&&nomeProfissional(a.profissionalId)?' · '+esc(nomeProfissional(a.profissionalId)):'')+(a.nota?' · '+'★'.repeat(a.nota):''), valor:a.valor, quando:quandoAt(a)})), ...r.avulsas.map(l=>({data:l.data, txt:esc(l.desc)+(l.detalhes?' · '+esc(l.detalhes):''), valor:l.valor, quando:+new Date(l.criadoEm)||0}))]
+      .sort((a,b)=>b.data.localeCompare(a.data) || b.quando-a.quando).slice(0,15).map(x=>`<tr><td class="mudo">${fmtData(x.data)}</td><td>${x.txt}</td>${souDono()?`<td style="text-align:right">${brl(x.valor)}</td>`:''}</tr>`).join('')}</table>`:'<p class="mudo pequeno">Nenhum serviço ou compra ainda.</p>'}
     <div class="grade" style="grid-template-columns:1fr 1fr;margin-top:14px">
       <a class="btn zap peq" style="text-decoration:none" target="_blank" rel="noopener" href="${linkZap(c.fone,`Olá, ${c.nome.split(' ')[0]}! Aqui é da Vizzani Estética.`)}"><span>WhatsApp</span></a>
       <button class="btn sec peq" onclick="editarCliente('${cid}')"><span>Editar</span></button>
@@ -1715,6 +1759,14 @@ function abrirCliente(cid){
       ${c.temLogin?`<button class="btn sec peq" onclick="fecharModal();liberarSenha('${cid}')"><span>Liberar senha</span></button>`:''}
     </div>
     <button class="btn sec bloco" style="margin-top:10px" onclick="fecharModal()"><span>Fechar</span></button>`);
+}
+// Clube na ficha, visão do funcionário: só a situação e as lavagens (mensalidade e pagamentos ficam com o dono)
+function clubeFuncionarioHTML(cid, cl){
+  if(!cl) return '<p class="mudo pequeno">Não é do Clube.</p>';
+  if(cl.tipo==='pendente') return '<div class="info">Pediu para assinar o Clube. O dono ativa quando receber a 1ª mensalidade.</div>';
+  if(cl.tipo==='encerrado') return '<p class="mudo pequeno">Clube encerrado.</p>';
+  return `<div class="${cl.tipo==='aberto'&&cl.atraso>0?'erro':'info'}"><b>Clube ${PORTES[cl.porte]}</b> · ${cl.tipo==='em_dia'?'mensalidade em dia':cl.atraso>0?`mensalidade atrasada há ${cl.atraso} dia${cl.atraso>1?'s':''}`:'mensalidade vence hoje'}
+    <br><span class="pequeno">Lavagens usadas/agendadas: ${resumoClube(cid)} · desde ${fmtData(cl.desde)}</span></div>`;
 }
 // Pagamentos do Clube na ficha, com "apagar" para corrigir registro feito por engano
 function pagamentosClubeHTML(cid){
@@ -1737,18 +1789,19 @@ function telaClubeDono(){
   const aberto = ativos.filter(x=>x.s.tipo==='aberto'), emDia = ativos.filter(x=>x.s.tipo==='em_dia');
   const previsto = ativos.reduce((s,x)=>s+D.config.clubePrecos[x.s.porte],0);
   const mes = iso(HOJE).slice(0,7), recebidoMes = D.lancamentos.filter(l=>l.tipo==='entrada' && l.cat==='Clube' && l.data.slice(0,7)===mes).reduce((s,l)=>s+l.valor,0);
+  const dono = souDono();
   let h = `<div style="margin-top:18px"><h1>Clientes</h1><p class="sub">Assinaturas do Clube Vizzani.</p></div>${abasCli()}
     <div class="kpis" style="margin-top:12px">
-      <div class="kpi destaque"><b>${ativos.length}</b><span>assinantes ativos · ${brl(previsto)}/mês previstos</span></div>
+      <div class="kpi destaque"><b>${ativos.length}</b><span>assinantes ativos${dono?` · ${brl(previsto)}/mês previstos`:''}</span></div>
       <div class="kpi"><b class="entra">${emDia.length}</b><span>em dia</span></div>
       <div class="kpi" style="border-color:${aberto.some(x=>x.s.atraso>0)?'#8a2424':'var(--linha)'}"><b class="${aberto.length?'sai':''}">${aberto.length}</b><span>em aberto</span></div>
-      <div class="kpi"><b>${brl(recebidoMes)}</b><span>recebido do Clube este mês</span></div>
+      ${dono?`<div class="kpi"><b>${brl(recebidoMes)}</b><span>recebido do Clube este mês</span></div>`:''}
       <div class="kpi"><b>${pendentes.length}</b><span>pedidos para ativar</span></div>
     </div>`;
-  if(pendentes.length) h += `<div class="traco">PEDIRAM PARA ASSINAR</div><div class="painel">${pendentes.map(({c,s})=>`<div class="fila" style="grid-template-columns:1fr auto"><div><b>${esc(c.nome)}</b><div class="mudo pequeno">${PORTES[s.porte]} · ${brl(D.config.clubePrecos[s.porte])}/mês · ${fmtFone(c.fone)}</div></div><button class="btn peq" onclick="abrirMensalidade('${c.id}','${s.porte}',true)"><span>Ativar</span></button></div>`).join('')}</div>`;
+  if(pendentes.length) h += `<div class="traco">PEDIRAM PARA ASSINAR</div><div class="painel">${pendentes.map(({c,s})=>`<div class="fila" style="grid-template-columns:1fr auto"><div><b>${esc(c.nome)}</b><div class="mudo pequeno">${PORTES[s.porte]} · ${brl(D.config.clubePrecos[s.porte])}/mês · ${fmtFone(c.fone)}</div></div>${dono?`<button class="btn peq" onclick="abrirMensalidade('${c.id}','${s.porte}',true)"><span>Ativar</span></button>`:''}</div>`).join('')}</div>`;
   if(aberto.length) h += `<div class="traco">MENSALIDADE EM ABERTO</div><div class="painel">${aberto.sort((a,b)=>b.s.atraso-a.s.atraso).map(({c,s})=>`<div class="fila" style="grid-template-columns:1fr auto"><div role="button" style="cursor:pointer" onclick="abrirCliente('${c.id}')"><b>${esc(c.nome)}</b> <span class="selo ${s.atraso>0?'vermelho':'amarelo'}">${s.atraso>0?s.atraso+' dia'+(s.atraso>1?'s':'')+' de atraso':'vence hoje'}</span><div class="mudo pequeno">venceu ${fmtData(s.vencimento)} · ${brl(D.config.clubePrecos[s.porte])}${s.ultimo?' · último pgto '+fmtData(s.ultimo.data):''}</div></div>
-      <div class="acoes" style="margin:0;justify-content:flex-end"><button class="btn peq" onclick="abrirMensalidade('${c.id}','${s.porte}',false)"><span>Recebi</span></button><a class="btn zap peq" style="text-decoration:none" target="_blank" rel="noopener" href="${linkZap(c.fone,msgCobrancaClube(c,s))}"><span>Cobrar</span></a></div></div>`).join('')}
-    <p class="mudo pequeno">Muito atrasado? Abra a ficha e toque em "Encerrar": as lavagens incluídas param na hora.</p></div>`;
+      ${dono?`<div class="acoes" style="margin:0;justify-content:flex-end"><button class="btn peq" onclick="abrirMensalidade('${c.id}','${s.porte}',false)"><span>Recebi</span></button><a class="btn zap peq" style="text-decoration:none" target="_blank" rel="noopener" href="${linkZap(c.fone,msgCobrancaClube(c,s))}"><span>Cobrar</span></a></div>`:'<span></span>'}</div>`).join('')}
+    <p class="mudo pequeno">${dono?'Muito atrasado? Abra a ficha e toque em "Encerrar": as lavagens incluídas param na hora.':'Mensalidade e cobrança ficam com o dono.'}</p></div>`;
   h += `<div class="traco">EM DIA</div><div class="painel">${emDia.length?emDia.sort((a,b)=>a.s.proximo.localeCompare(b.s.proximo)).map(({c,s})=>`<div class="fila" role="button" style="cursor:pointer;grid-template-columns:1fr auto" onclick="abrirCliente('${c.id}')"><div><b>${esc(c.nome)}</b><div class="mudo pequeno">${PORTES[s.porte]} · lavagens ${resumoClube(c.id)}</div></div><div style="text-align:right" class="pequeno">próxima<br><b>${fmtData(s.proximo)}</b></div></div>`).join(''):'<div class="vazio">Nenhum assinante em dia.</div>'}</div>
     <p class="mudo pequeno">A mensalidade vence todo mês no mesmo dia em que a assinatura foi ativada. Pagamento feito até 7 dias antes já conta para o mês.</p>`;
   return h;
@@ -1826,6 +1879,7 @@ function telaAjustes(){
     <label class="campo">Pontos para uma lavagem grátis<input type="number" min="1" value="${D.config.pontosResgate}" onchange="salvarConfig({pontos_resgate:Math.max(1,Math.round(Number(this.value)))})"></label>
     ${Object.entries(PORTES).map(([k,n])=>`<label class="campo">Mensalidade do Clube, ${n} (R$)<input type="number" step="0.1" min="0" value="${D.config.clubePrecos[k]}" onchange="salvarConfig({clube_preco_${k}:Math.max(0,Number(this.value))})"></label>`).join('')}
   </div>
+  ${ajustesEquipeHTML()}
   <div class="traco">SUA CONTA</div><div class="painel">
     <p class="mudo pequeno" style="margin-top:0">Entrou como ${esc(sessao?.user?.email||'')}.</p>
     <button class="btn sec bloco" onclick="modalNovaSenha()"><span>Trocar minha senha</span></button>
@@ -1834,6 +1888,71 @@ function telaAjustes(){
   </div>
   <p class="mudo pequeno" style="text-align:center">Preços de acordo com o site vizzaniestetica.com.br</p>`;
   return h;
+}
+/* ---- Equipe (só o dono): funcionários com login e profissionais que fazem os serviços ---- */
+function ajustesEquipeHTML(){
+  return `<div class="traco">EQUIPE</div><div class="painel">
+    <p class="mudo pequeno" style="margin-top:0">O funcionário entra por "Acesso da equipe" com o WhatsApp e a senha. Ele faz a operação (Hoje, Agenda, Balcão, Clientes, estoque), mas não vê o Caixa, os valores totais nem os Ajustes.</p>
+    ${D.equipe.length?D.equipe.map(f=>`<div class="fila" style="grid-template-columns:1fr auto"><div><b>${esc(f.nome)}</b> ${f.ativo?'<span class="selo verde">ativo</span>':'<span class="selo vermelho">sem acesso</span>'}<div class="mudo pequeno">${fmtFone(f.fone)}</div></div>
+      <div class="acoes" style="margin:0;justify-content:flex-end">${f.ativo?`<button class="btn sec peq" onclick="senhaFuncionario('${f.id}')"><span>Nova senha</span></button>`:''}<button class="btn sec peq" onclick="acessoFuncionario('${f.id}',${!f.ativo})"><span>${f.ativo?'Desativar':'Reativar'}</span></button></div></div>`).join(''):'<p class="mudo pequeno">Nenhum funcionário cadastrado.</p>'}
+    <button class="btn bloco" style="margin-top:10px" onclick="novoFuncionario()"><span>+ Cadastrar funcionário</span></button>
+  </div>
+  <div class="traco">PROFISSIONAIS</div><div class="painel">
+    <p class="mudo pequeno" style="margin-top:0">Quem faz os serviços. Ao marcar Pronto e ao Entregar, o app guarda quem fez. Só a loja vê; o cliente não vê o nome.</p>
+    ${D.profissionais.map(p=>`<div class="fila" style="grid-template-columns:1fr auto"><div><b>${esc(p.nome)}</b> ${p.ativo?'':'<span class="selo">inativo</span>'}<div class="mudo pequeno">${p.perfilId?'tem login no app':'sem login'} · ${D.at.filter(a=>a.profissionalId===p.id && a.status==='entregue' && a.data.slice(0,7)===iso(HOJE).slice(0,7)).length} serviço(s) entregue(s) este mês</div></div>
+      <div class="acoes" style="margin:0;justify-content:flex-end"><button class="btn sec peq" onclick="renomearProfissional('${p.id}')"><span>Nome</span></button>${p.perfilId?'':`<button class="btn sec peq" onclick="ativarProfissional('${p.id}',${!p.ativo})"><span>${p.ativo?'Desativar':'Reativar'}</span></button>`}</div></div>`).join('') || '<p class="mudo pequeno">Nenhum profissional cadastrado.</p>'}
+    <button class="btn sec bloco" style="margin-top:10px" onclick="novoProfissional()"><span>+ Profissional sem login (ex.: ajudante)</span></button>
+  </div>`;
+}
+function novoFuncionario(){
+  abrirModal(`<h2 style="margin-top:0">Cadastrar funcionário</h2>
+    <label class="campo" style="margin-top:12px">Nome<input id="nf-nome" placeholder="Ex.: João"></label>
+    <label class="campo">WhatsApp (é o login dele)<input id="nf-fone" inputmode="tel" placeholder="(34) 99999-8888"></label>
+    <label class="campo">Senha provisória (mínimo 6)<input id="nf-senha" type="text" autocomplete="off"></label>
+    <p class="mudo pequeno">Passe o WhatsApp e a senha para ele. Depois ele troca a senha em "Conta".</p>
+    <button class="btn bloco" onclick="salvarFuncionario()"><span>Cadastrar</span></button>
+    <button class="btn sec bloco" style="margin-top:8px" onclick="fecharModal()"><span>Voltar</span></button>`);
+}
+async function salvarFuncionario(){
+  const nome = document.getElementById('nf-nome').value.trim(), fone = soDig(document.getElementById('nf-fone').value).replace(/^55(?=\d{11}$)/,''), senha = document.getElementById('nf-senha').value;
+  if(nome.length<2) return aviso('Informe o nome.');
+  if(!/^[1-9]{2}9\d{8}$/.test(fone)) return aviso('WhatsApp inválido. Use DDD + número, ex.: (34) 99999-8888.');
+  if(senha.length<6) return aviso('A senha precisa ter pelo menos 6 caracteres.');
+  fecharModal();
+  await acao(()=>chamarConta({acao:'criar_funcionario', nome, fone, senha}), `${nome} cadastrado. Login: WhatsApp ${fmtFone(fone)}.`);
+}
+function senhaFuncionario(id){
+  const f = D.equipe.find(x=>x.id===id), senha = prompt(`Nova senha para ${f.nome} (mínimo 6 caracteres):`);
+  if(senha==null) return;
+  if(senha.length<6) return aviso('A senha precisa ter pelo menos 6 caracteres.');
+  return acao(()=>chamarConta({acao:'senha_funcionario', perfil_id:id, senha}), `Senha de ${f.nome} trocada. Passe a nova senha para ele.`);
+}
+function acessoFuncionario(id, ativo){
+  const f = D.equipe.find(x=>x.id===id);
+  if(!ativo && !confirm(`Tirar o acesso de ${f.nome}? Ele sai do app na hora e não entra mais. O histórico dele fica guardado.`)) return;
+  return acao(()=>chamarConta({acao:'acesso_funcionario', perfil_id:id, ativo}), ativo?`Acesso de ${f.nome} reativado.`:`Acesso de ${f.nome} desativado.`);
+}
+function novoProfissional(){
+  const nome = (prompt('Nome do profissional:')||'').trim(); if(!nome) return;
+  if(nome.length<2) return aviso('Informe o nome.');
+  return acao(()=>q(sb.from('profissionais').insert({nome})), 'Profissional cadastrado.');
+}
+function renomearProfissional(id){
+  const p = D.profissionais.find(x=>x.id===id), nome = (prompt('Nome:', p.nome)||'').trim();
+  if(!nome || nome===p.nome) return;
+  if(nome.length<2) return aviso('Informe o nome.');
+  return acao(()=>q(sb.from('profissionais').update({nome}).eq('id',id)), 'Nome salvo.');
+}
+const ativarProfissional = (id, ativo) => acao(()=>q(sb.from('profissionais').update({ativo}).eq('id',id)), 'Salvo.');
+// Funcionário: no lugar de Ajustes, só a própria conta
+function telaConta(){
+  return `<div style="margin-top:18px"><h1>Conta</h1><p class="sub">${esc(perfil?.nome||'')} · equipe da Vizzani</p></div>
+    <div class="painel" style="margin-top:16px">
+      <button class="btn sec bloco" onclick="modalNovaSenha()"><span>Trocar minha senha</span></button>
+      ${botaoInstalar()}
+      <button class="btn sec bloco" style="margin-top:8px" onclick="sair()"><span>Sair</span></button>
+    </div>
+    <p class="mudo pequeno">Esqueceu a senha? Peça ao dono: ele cria uma nova em Ajustes → Equipe.</p>`;
 }
 // Cada campo de Ajustes grava na hora e recarrega (as regras do servidor passam a usar o novo valor)
 const salvarConfig = campos => acao(()=>q(sb.from('config').update(campos).eq('id',1)), 'Salvo.');
@@ -1948,7 +2067,7 @@ async function verVistoria(id){
     ${vt.obs?`<p class="mudo" style="margin:0 0 4px">${esc(vt.obs)}</p>`:''}
     <p class="pequeno" style="margin:0 0 12px">${vt.ciente?'<span class="selo verde">Cliente ciente e de acordo</span>':'<span class="selo amarelo">Ciência do cliente não registrada</span>'}</p>
     ${vt.fotos.length?`<p class="mudo pequeno">${vt.manter?'📌 Fotos mantidas até o caso ser resolvido.':`As fotos são apagadas em ${fmtData(iso(addDias(new Date(vt.quando),D.config.fotosDias)))} (${D.config.fotosDias} dias após a entrada).`}</p>`:''}
-    ${modo==='dono'&&vt.fotos.length?`<button class="btn sec bloco" style="margin-bottom:10px" onclick="alternarManter('${a.id}')"><span>${vt.manter?'Liberar exclusão automática':'Manter fotos (cliente reclamou)'}</span></button>`:''}
+    ${ehEquipe()&&vt.fotos.length?`<button class="btn sec bloco" style="margin-bottom:10px" onclick="alternarManter('${a.id}')"><span>${vt.manter?'Liberar exclusão automática':'Manter fotos (cliente reclamou)'}</span></button>`:''}
     ${vt.fotosApagadas?`<div class="info">As ${vt.fotosApagadas} fotos desta entrada foram apagadas após ${D.config.fotosDias} dias. As avarias anotadas continuam registradas.</div>`:''}
     ${urls.map((f,i)=>`<img class="foto-grande" src="${esc(f)}" alt="Foto ${i+1} da entrada">`).join('')}
     <button class="btn sec bloco" onclick="fecharModal()"><span>Fechar</span></button>`);
@@ -1990,7 +2109,7 @@ function telaEntrar(){
           <div class="linha entre" style="margin-top:8px"><button class="link" onclick="ent.tela='primeiro';ent.erro='';ent.info='';render()">Primeiro acesso</button><button class="link" onclick="esqueciSenha()">Esqueci minha senha</button></div>`;
   } else if(t==='equipe'){
     h += `<p style="margin-top:0"><b>Acesso da equipe</b></p>`
-       + campo('E-mail','email','email','autocomplete="username"')
+       + campo('E-mail ou WhatsApp','email','text','autocomplete="username" autocapitalize="off"')
        + campo('Senha','senha','password','autocomplete="current-password" onkeydown="if(event.key===\'Enter\')entrarEquipe()"')
        + `<button class="btn bloco" onclick="entrarEquipe()"><span>Entrar</span></button>
           <div class="linha entre" style="margin-top:8px"><button class="link" onclick="ent.tela='entrar';ent.erro='';ent.info='';render()">Voltar</button><button class="link" onclick="recuperarEquipe()">Esqueci a senha</button></div>`;
@@ -2042,15 +2161,18 @@ async function fazerLogin(){
   const erro = await entrarCom(emailDoFone(fone), ent.senha);
   if(erro) erroEnt(/Invalid login/i.test(erro.message) ? 'WhatsApp ou senha incorretos. Se você é cliente da Vizzani e nunca entrou no app, toque em "Primeiro acesso".' : msgErro(erro));
 }
+// Dono entra com e-mail; funcionário, com o WhatsApp (login 55{fone}@equipe.vizzani.app)
 async function entrarEquipe(){
-  const email = ent.email.trim().toLowerCase();
-  if(!email.includes('@') || !ent.senha) return erroEnt('Informe e-mail e senha.');
+  let email = ent.email.trim().toLowerCase();
+  const fone = soDig(email).replace(/^55(?=\d{11}$)/,'');
+  if(!email.includes('@') && foneValido(fone)) email = `55${fone}@equipe.vizzani.app`;
+  if(!email.includes('@') || !ent.senha) return erroEnt('Informe o e-mail (dono) ou o WhatsApp (funcionário) e a senha.');
   const erro = await entrarCom(email, ent.senha);
-  if(erro) return erroEnt(/Invalid login/i.test(erro.message) ? 'E-mail ou senha incorretos.' : msgErro(erro));
+  if(erro) return erroEnt(/Invalid login/i.test(erro.message) ? 'Login ou senha incorretos.' : /banned/i.test(erro.message) ? 'Este acesso foi desativado. Fale com o dono.' : msgErro(erro));
 }
 async function recuperarEquipe(){
   const email = ent.email.trim().toLowerCase();
-  if(!email.includes('@')) return erroEnt('Digite seu e-mail acima e toque de novo em "Esqueci a senha".');
+  if(!email.includes('@')) return erroEnt(soDig(email).length>=10 ? 'Funcionário: peça ao dono uma senha nova (Ajustes → Equipe).' : 'Digite seu e-mail acima e toque de novo em "Esqueci a senha".');
   carregando(true);
   const { error } = await sb.auth.resetPasswordForEmail(email, {redirectTo: location.origin + location.pathname});
   carregando(false);
