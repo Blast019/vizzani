@@ -979,7 +979,9 @@ function painelLembretes(){
 }
 // Deixa o WhatsApp abrir primeiro e depois grava que o lembrete foi enviado
 function marcarLembrete(id){ setTimeout(()=>acao(()=>q(sb.from('atendimentos').update({lembrete_em:new Date().toISOString()}).eq('id',id)))); }
-// Notificações neste aparelho (o envio automático pelo servidor entra junto com o app instalável)
+// Notificações neste aparelho. O envio pelo servidor (Web Push + enviar-lembretes) ainda não existe:
+// enquanto PUSH_PRONTO for false, o app não oferece "Ativar lembretes" para não prometer aviso que não chega.
+const PUSH_PRONTO = false;
 const pushAtivo = () => { try{ return localStorage.getItem('vizzani-push')==='1' && 'Notification' in window && Notification.permission==='granted'; }catch(e){ return false; } };
 function ativarNotificacoes(){
   const fim = ok => { try{ localStorage.setItem('vizzani-push', ok?'1':'0'); }catch(e){} aviso(ok?'Lembretes ativados neste celular.':'Notificações bloqueadas. Libere nas configurações do navegador.'); if(document.getElementById('modal').innerHTML) fecharModal(); render(); };
@@ -994,7 +996,7 @@ function modalLembretes(id){
     <p style="margin:14px 0 8px"><b>Não esqueça do horário:</b></p>
     <button class="btn bloco" onclick="baixarIcs('${id}')"><span>📅 Salvar na agenda do celular</span></button>
     <p class="mudo pequeno" style="margin:6px 0 10px">O celular avisa 1 h antes, mesmo sem internet.</p>
-    ${c.push?'<p class="mudo pequeno">🔔 Lembretes do app já ativados.</p>':`<button class="btn sec bloco" onclick="ativarNotificacoes()"><span>🔔 Ativar lembretes do app</span></button><p class="mudo pequeno" style="margin:6px 0 0">Avisamos 1 dia antes e 2 h antes.</p>`}
+    ${!PUSH_PRONTO?'':c.push?'<p class="mudo pequeno">🔔 Lembretes do app já ativados.</p>':`<button class="btn sec bloco" onclick="ativarNotificacoes()"><span>🔔 Ativar lembretes do app</span></button><p class="mudo pequeno" style="margin:6px 0 0">Avisamos 1 dia antes e 2 h antes.</p>`}
     <button class="btn sec bloco" style="margin-top:12px" onclick="fecharModal()"><span>Fechar</span></button>`);
 }
 
@@ -2143,7 +2145,7 @@ function abrirMeusDados(){
     <p class="mudo pequeno" style="margin-top:-4px">WhatsApp: ${fmtFone(c.fone)}. Para trocar o número, fale com a Vizzani.</p>
     <label class="check"><input type="checkbox" id="md-cons" ${c.consente?'checked':''}> Quero receber ofertas e lembretes de retorno pelo WhatsApp</label>
     <p class="mudo pequeno" style="margin-top:-4px">Lembretes dos seus horários agendados sempre são enviados.</p>
-    ${pushAtivo()?'<p class="pequeno">🔔 Lembretes no celular ativados.</p>':`<button class="btn sec bloco" style="margin-bottom:10px" onclick="ativarNotificacoes()"><span>🔔 Ativar lembretes no celular</span></button>`}
+    ${!PUSH_PRONTO?'':pushAtivo()?'<p class="pequeno">🔔 Lembretes no celular ativados.</p>':`<button class="btn sec bloco" style="margin-bottom:10px" onclick="ativarNotificacoes()"><span>🔔 Ativar lembretes no celular</span></button>`}
     <button class="btn bloco" onclick="salvarMeusDados()"><span>Salvar</span></button>
     <button class="btn sec bloco" style="margin-top:8px" onclick="modalNovaSenha()"><span>Trocar minha senha</span></button>
     <button class="btn sec bloco" style="margin-top:8px" onclick="fecharModal()"><span>Fechar</span></button>`);
