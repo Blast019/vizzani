@@ -76,7 +76,7 @@ async function carregar(){
       fotosDepois: cfg.fotos_depois, baixaAuto: cfg.baixa_auto_estoque,
     },
     servicos: servs.filter(s => s.ativo || equipe).map(s => ({ id: s.id, nome: s.nome, dur: s.duracao_min, precos: { carro: num(s.preco_carro), suv: num(s.preco_suv), moto: num(s.preco_moto) },
-      apartir: s.a_partir_de, lavagem: s.lavagem, noClube: s.no_clube ?? s.lavagem, destaque: s.destaque, inclui: s.inclui || '' })),
+      apartir: s.a_partir_de, lavagem: s.lavagem, noClube: s.no_clube ?? s.lavagem, destaque: s.destaque, inclui: s.inclui || '', ativo: s.ativo !== false, ordem: s.ordem || 0 })),
     bloqueios: bloqs.map(b => ({ id: b.id, data: b.data, diaTodo: b.dia_todo, ini: hm(b.inicio) || '00:00', fim: hm(b.fim) || '23:59', motivo: b.motivo })),
     clientes: [], veiculos: [], at: [], pendencias: [], avisos: {}, clube: {}, resgatesPts: {}, recados: [], notifs: [],
     lancamentos: [], produtos: [], estoqueMov: [], equipe: [], profissionais: [], clubeMeses: null,
@@ -259,7 +259,9 @@ function clubeElegivel(cid, sid, data){
   const st = statusClube(cid);
   return {ok:true, restam:lim-usados, mes, atraso: st?.tipo==='aberto' && st.atraso>0 ? st.atraso : 0};
 }
-const nomesNoClube = () => { const n = D.servicos.filter(s=>s.noClube).map(s=>s.nome.toLowerCase()); return n.length ? n.join(', ') : 'nenhum serviço definido'; };
+// Serviços que aparecem para escolher (os desativados continuam no histórico)
+const servicosAtivos = () => D.servicos.filter(s=>s.ativo);
+const nomesNoClube = () => { const n = servicosAtivos().filter(s=>s.noClube).map(s=>s.nome.toLowerCase()); return n.length ? n.join(', ') : 'nenhum serviço definido'; };
 const avisoClubeHTML =(cid, el, marcado, onchange) => !noClube(cid) ? '' : el.ok
   ? `<label class="check info" style="display:flex;margin-top:12px"><input type="checkbox" ${marcado?'checked':''} onchange="${onchange}"> <span><b>Usar lavagem do Clube</b> (sem cobrança, sem sinal) · restam ${el.restam} de ${D.config.clubeLavagens} em ${el.mes}${el.atraso?`<br><span class="sai">⚠ Mensalidade atrasada há ${el.atraso} dia${el.atraso>1?'s':''}.</span>`:''}</span></label>`
   : `<p class="mudo pequeno" style="margin-top:10px">⭐ Cliente do Clube, mas este agendamento será cobrado: ${esc(el.motivo)}</p>`;
@@ -521,6 +523,7 @@ function telaInicio(){
       <p class="sub">${txt}</p>
       <div class="etapas"><i class="etapa ${passo>=1?'feita':''}"></i><i class="etapa ${passo>=2?'feita':''}"></i><i class="etapa ${passo>=3?'pronta':''}"></i></div>
       <div class="etapas-rot"><span>Agendado</span><span style="text-align:center">Recebido</span><span style="text-align:right">Pronto</span></div>
+      ${avisoPixCliente(a)}
       ${a.status==='agendado'?`${a.atraso?`<p class="mudo pequeno" style="margin:10px 0 0">Você avisou um atraso de ${a.atraso} min.</p>`:''}<div class="acoes"><button class="btn sec peq" onclick="avisarAtraso('${a.id}')"><span>Vou me atrasar</span></button><button class="btn sec peq" onclick="remarcar('${a.id}')"><span>Remarcar</span></button><button class="btn sec peq" onclick="cancelarAg('${a.id}')"><span>Cancelar</span></button></div>`:''}
     </div>`;
   });
@@ -547,6 +550,7 @@ function telaInicio(){
   if(proximos.length){
     h += `<div class="traco">PRÓXIMOS</div>`;
     proximos.forEach(a=> h+=`<div class="painel"${a.data===iso(addDias(HOJE,1))?' style="border-color:#2a45b8"':''}><div class="linha entre"><div>${a.data===iso(addDias(HOJE,1))?'<span class="selo azul">🔔 É amanhã</span><br>':''}<b>${esc(servico(a.servicoId).nome)}</b>${a.clube?' <span class="selo azul">⭐ pelo Clube</span>':''}<div class="mudo pequeno">${DIAS[dataDe(a.data).getDay()]}, ${fmtData(a.data)} às ${a.hora}</div></div>${placaHTML(a.placa,true)}</div>
+      ${avisoPixCliente(a)}
       <div class="acoes"><button class="btn sec peq" onclick="remarcar('${a.id}')"><span>Remarcar</span></button><button class="btn sec peq" onclick="cancelarAg('${a.id}')"><span>Cancelar</span></button><button class="btn sec peq" onclick="baixarIcs('${a.id}')"><span>📅 Salvar na agenda</span></button></div></div>`);
   }
   const pts = pontosDe(c.id);
@@ -660,7 +664,7 @@ function telaAgendar(){
     h += `<div class="traco">VEÍCULO</div><div class="chips">${vs.map(x=>`<button class="chip ${x.placa===ag.placa?'on':''}" onclick="ag.placa='${x.placa}';render()">${placaHTML(x.placa,true)}<span class="pequeno" style="display:block;margin-top:4px">${esc(x.modelo)}</span></button>`).join('')}</div>`;
   }
   h += `<div class="traco">SERVIÇO</div><p class="mudo pequeno" style="margin-top:-4px">Preços para ${PORTES[v.porte]} (${esc(v.modelo)}).</p>`;
-  D.servicos.filter(s=>s.precos[v.porte]!=null).forEach(s=>{
+  servicosAtivos().filter(s=>s.precos[v.porte]!=null).forEach(s=>{
     const cobreClube = clube && s.noClube && usos < D.config.clubeLavagens;
     h += `<button class="servico ${ag.servicoId===s.id?'on':''}" onclick="ag.servicoId='${s.id}';render()">
       <span><b>${esc(s.nome)}</b>${s.destaque?` <span class="selo azul">${s.destaque}</span>`:''}<span class="mudo pequeno" style="display:block">${esc(s.inclui)}</span><span class="mudo pequeno" style="display:block">cerca de ${durTxt(s.dur)}</span></span>
@@ -732,7 +736,64 @@ async function confirmarAg(sinal){
   const id = await acao(()=>q(sb.rpc('agendar', {p_placa:ag.placa, p_servico:ag.servicoId, p_data:ag.data, p_hora:ag.hora, p_sinal_pago:!!sinal})));
   disp = {};
   if(id===false){ ag.hora = null; render(); return; }
-  ag = {}; irPara('inicio'); modalLembretes(id);
+  ag = {}; irPara('inicio');
+  if(sinal) modalComprovante(id); else modalLembretes(id);
+}
+/* ---- Sinal conferido pelo dono: o cliente informa o Pix, a vaga fica segura como "aguardando" até o dono conferir ---- */
+// Pix do sinal informado pelo cliente e ainda não conferido pelo dono (em qualquer etapa)
+const pixNaoConferido = a => !!a.sinal && a.sinalStatus==='aguardando';
+const aguardandoPix = a => a.status==='agendado' && pixNaoConferido(a);
+const quandoTxt = a => `${DIAS[dataDe(a.data).getDay()]}, ${fmtData(a.data)} às ${a.hora}`;
+const msgComprovante = a => `Olá! Acabei de pagar o sinal de ${brl(D.config.sinal)} pelo Pix para ${servico(a.servicoId).nome} em ${quandoTxt(a)} (placa ${a.placa}). Segue o comprovante 👇`;
+const msgPixOk = (a,c) => `Olá, ${c.nome.split(' ')[0]}! Recebemos o seu Pix de ${brl(D.config.sinal)}. ✅ Seu horário está confirmado: ${servico(a.servicoId).nome}, ${quandoTxt(a)} (${a.placa}). Até lá! 🚗✨`;
+const msgPixPedir = (a,c) => `Olá, ${c.nome.split(' ')[0]}! Aqui é da Vizzani. Ainda não localizamos o Pix do sinal (${brl(D.config.sinal)}) do seu horário de ${quandoTxt(a)}. Pode nos enviar o comprovante por aqui? Assim confirmamos a sua vaga. 🙏`;
+const msgPixNao = (a,c) => `Olá, ${c.nome.split(' ')[0]}! Não localizamos o Pix do sinal (${brl(D.config.sinal)}) do horário de ${quandoTxt(a)}, então a vaga foi liberada. Se você já pagou, mande o comprovante por aqui que a gente resolve na hora. Para agendar de novo, é pelo app. 🙏`;
+const btnComprovante = a => `<a class="btn zap peq" style="text-decoration:none" target="_blank" rel="noopener" href="${linkZap(D.loja.whatsapp.replace(/^55/,''), msgComprovante(a))}"><span>Enviar comprovante</span></a>`;
+function avisoPixCliente(a){
+  if(!aguardandoPix(a)) return '';
+  return `<div class="info" style="margin-top:10px">⏳ <b>Aguardando a Vizzani conferir o Pix do sinal.</b> Sua vaga está guardada. Se ainda não mandou, envie o comprovante pelo WhatsApp.<div class="acoes">${btnComprovante(a)}</div></div>`;
+}
+function modalComprovante(id){
+  const a = D.at.find(x=>x.id===id); if(!a) return modalLembretes(id);
+  abrirModal(`<h2 style="margin-top:0">Falta só o comprovante 📄</h2><p class="sub">${esc(servico(a.servicoId).nome)} · ${quandoTxt(a)}</p>
+    <div class="info" style="margin-top:12px">Sua vaga está <b>guardada</b>. Envie o comprovante do Pix para a Vizzani pelo WhatsApp. Assim que conferirem, o horário fica <b>confirmado</b> e você recebe o aviso aqui no app.</div>
+    <a class="btn zap bloco" style="margin-top:14px;text-decoration:none" target="_blank" rel="noopener" onclick="setTimeout(()=>modalLembretes('${id}'),400)" href="${linkZap(D.loja.whatsapp.replace(/^55/,''), msgComprovante(a))}"><span>Enviar comprovante no WhatsApp</span></a>
+    <button class="btn sec bloco" style="margin-top:8px" onclick="modalLembretes('${id}')"><span>Enviar depois</span></button>`);
+}
+// Dono: Pix para conferir (no Hoje)
+function painelPix(){
+  if(!souDono()) return '';
+  const lista = D.at.filter(a=>pixNaoConferido(a) && ['agendado','recebido','pronto'].includes(a.status)).sort((a,b)=>(a.data+a.hora).localeCompare(b.data+b.hora));
+  if(!lista.length) return '';
+  return `<div class="traco">PIX DO SINAL PARA CONFERIR</div><div class="painel" style="border-color:#8a6510">
+    <p class="mudo pequeno" style="margin-top:0">A vaga fica guardada até você conferir no banco. Recebeu? Toque em "Recebi". Não caiu? Peça o comprovante ou libere o horário.</p>
+    ${lista.map(a=>{ const c = cliente(donoAt(a)); return `<div class="fila" style="grid-template-columns:1fr"><div><b>${esc(c?.nome||'')}</b> · ${brl(D.config.sinal)}<div class="mudo pequeno">${esc(servico(a.servicoId).nome)} · ${quandoTxt(a)} · ${esc(a.placa)}</div></div>
+      <div class="acoes" style="margin-top:6px"><button class="btn peq" onclick="confirmarPix('${a.id}')"><span>Recebi</span></button><a class="btn zap peq" style="text-decoration:none" target="_blank" rel="noopener" href="${linkZap(c.fone,msgPixPedir(a,c))}"><span>Pedir comprovante</span></a><button class="btn sec peq" style="border-color:#8a2424" onclick="recusarPix('${a.id}')"><span>Não recebi</span></button></div></div>`; }).join('')}
+  </div>`;
+}
+async function confirmarPix(id, depois){
+  const a = D.at.find(x=>x.id===id), c = cliente(donoAt(a));
+  const ok = await acao(async()=>{
+    await q(sb.from('atendimentos').update({sinal_status:'pago'}).eq('id',id));
+    await enviarRecado(c.id, id, `Recebemos o seu Pix do sinal. ✅ Horário confirmado: ${servico(a.servicoId).nome}, ${quandoTxt(a)}.`);
+  }, 'Pix confirmado. O cliente já vê no app.');
+  if(ok===false) return;
+  if(depois) return depois();
+  abrirModal(`<h2 style="margin-top:0">Pix confirmado ✅</h2><p class="sub">Avise ${esc(c.nome)} também pelo WhatsApp (opcional).</p>
+    <a class="btn zap bloco" style="margin-top:14px;text-decoration:none" target="_blank" rel="noopener" onclick="fecharModal()" href="${linkZap(c.fone,msgPixOk(a,c))}"><span>Enviar confirmação no WhatsApp</span></a>
+    <button class="btn sec bloco" style="margin-top:8px" onclick="fecharModal()"><span>Agora não</span></button>`);
+}
+async function recusarPix(id){
+  const a = D.at.find(x=>x.id===id), c = cliente(donoAt(a));
+  if(!confirm(`Não recebeu o Pix de ${c.nome}? O horário de ${quandoTxt(a)} será cancelado e a vaga liberada.`)) return;
+  const ok = await acao(async()=>{
+    await q(sb.from('atendimentos').update({status:'cancelado', cancelado_por:'loja', motivo_cancel:'Pix do sinal não recebido', sinal:false, sinal_status:null}).eq('id',id));
+    await enviarRecado(c.id, id, `Não localizamos o Pix do sinal do horário de ${quandoTxt(a)}, então a vaga foi liberada. Se você já pagou, mande o comprovante no WhatsApp da Vizzani.`);
+  }, 'Horário liberado.');
+  if(ok===false) return;
+  abrirModal(`<h2 style="margin-top:0">Horário liberado</h2><p class="sub">Avise ${esc(c.nome)} pelo WhatsApp.</p>
+    <a class="btn zap bloco" style="margin-top:14px;text-decoration:none" target="_blank" rel="noopener" onclick="fecharModal()" href="${linkZap(c.fone,msgPixNao(a,c))}"><span>Enviar aviso no WhatsApp</span></a>
+    <button class="btn sec bloco" style="margin-top:8px" onclick="fecharModal()"><span>Agora não</span></button>`);
 }
 
 function telaHistorico(){
@@ -821,13 +882,14 @@ function telaHoje(){
   ${D.pendencias.length?`<div class="info" style="margin-top:12px;cursor:pointer" onclick="irPara('balcao')">📝 ${D.pendencias.length} cadastro${D.pendencias.length>1?'s':''} de cliente para confirmar no Balcão.</div>`:''}
   ${clubeAtencao()?`<div class="info" style="margin-top:12px;cursor:pointer" onclick="subCli='clube';irPara('clientes')">⭐ ${clubeAtencao()} assinatura${clubeAtencao()>1?'s':''} do Clube precisa${clubeAtencao()>1?'m':''} de atenção (pedido para ativar ou mensalidade atrasada).</div>`:''}
   ${alertaEstoque()}
+  ${painelPix()}
   ${painelNotifs()}
   ${painelLembretes()}
   <div class="traco">FILA DO DIA</div><div class="painel">`;
   if(!lista.length) h += `<div class="vazio">Nenhum carro agendado hoje. Use o Balcão para registrar quem chegar.</div>`;
   lista.forEach(a=>{
     const v = veiculo(a.placa), c = donoDe(a.placa), s = servico(a.servicoId);
-    const selo = {agendado:a.sinal?'<span class="selo">Sinal pago</span>':'<span class="selo amarelo">Sem sinal</span>',recebido:'<span class="selo azul">Em atendimento</span>',pronto:'<span class="selo verde">Pronto</span>',entregue:'<span class="selo verde">Entregue</span>',faltou:'<span class="selo vermelho">Não veio</span>'}[a.status];
+    const selo = {agendado:aguardandoPix(a)?'<span class="selo amarelo">⏳ Pix a conferir</span>':a.sinal?'<span class="selo">Sinal pago</span>':'<span class="selo amarelo">Sem sinal</span>',recebido:'<span class="selo azul">Em atendimento</span>',pronto:'<span class="selo verde">Pronto</span>',entregue:'<span class="selo verde">Entregue</span>',faltou:'<span class="selo vermelho">Não veio</span>'}[a.status];
     let acao = '';
     if(a.status==='agendado') acao = `<button class="btn peq" onclick="mudar('${a.id}','recebido')"><span>Receber</span></button>`;
     if(a.status==='recebido') acao = `<button class="btn peq" onclick="mudar('${a.id}','pronto')"><span>Pronto</span></button>`;
@@ -845,7 +907,7 @@ function telaHoje(){
 async function mudar(id,st){
   if(st==='recebido'){ abrirVistoria(id); return; }
   const a = D.at.find(x=>x.id===id), campos = {status:st};
-  if(st==='faltou' && a.sinal) campos.sinal_status = 'retido';
+  if(st==='faltou' && a.sinal && a.sinalStatus!=='aguardando') campos.sinal_status = 'retido';   // Pix não conferido não entra no caixa
   // Quem fez: ao marcar Pronto, fica quem está logado (dá para trocar na entrega)
   if(st==='pronto' && !a.profissionalId && meuProfissional()) campos.profissional_id = meuProfissional();
   const ok = await acao(()=>q(sb.from('atendimentos').update(campos).eq('id',id)), st==='faltou'?'Registrado como falta.':null);
@@ -931,7 +993,8 @@ function totalEntrega(){
 }
 function desenharEntrega(){
   const e = entrega, a = D.at.find(x=>x.id===e.id), s = servico(a.servicoId), cid = donoAt(a);
-  const sinal = a.sinal?D.config.sinal:0, total = totalEntrega(), falta = Math.max(0,total-sinal);
+  // Sinal só desconta se o Pix foi conferido; sem conferir, cobra o valor todo
+  const pixPendente = pixNaoConferido(a), sinal = a.sinal && !pixPendente ? D.config.sinal : 0, total = totalEntrega(), falta = Math.max(0,total-sinal);
   const podeResgatar = !e.gratis && s.id==='simples' && pontosDe(cid) >= D.config.pontosResgate;
   abrirModal(`<h2 style="margin-top:0">Entregar${e.gratis?'':' e receber'}</h2>
     <div class="linha entre">${placaHTML(a.placa)}<b>${esc(s.nome)}</b></div>
@@ -946,6 +1009,7 @@ function desenharEntrega(){
     ${e.gratis?'':`<label class="campo">Desconto (%)<input type="number" min="0" max="100" value="${e.desconto}" oninput="entrega.desconto=Math.min(100,Math.max(0,Number(this.value)||0));atualizarTotalEntrega()"></label>`}
     ${!e.gratis&&noClube(cid)&&!s.noClube?'<p class="mudo pequeno" style="margin-top:-6px">Cliente do Clube: 10% de desconto já aplicado.</p>':''}
     ${podeResgatar?`<label class="check"><input type="checkbox" ${e.resgate?'checked':''} onchange="entrega.resgate=this.checked;desenharEntrega()"> Usar lavagem grátis (${D.config.pontosResgate} pontos, cliente tem ${pontosDe(cid)})</label>`:''}
+    ${pixPendente?`<div class="info" style="margin-top:10px">⏳ O Pix do sinal (${brl(D.config.sinal)}) ainda não foi conferido, então ele <b>não foi descontado</b>.${souDono()?`<div class="acoes"><button class="btn peq" onclick="confirmarPix('${a.id}',()=>desenharEntrega())"><span>Recebi o Pix</span></button></div>`:' Peça ao dono para conferir.'}</div>`:''}
     ${sinal?`<div class="linha entre"><span class="mudo">Sinal já pago</span><b>− ${brl(sinal)}</b></div>`:''}
     <div class="linha entre" style="margin-top:6px"><span>A receber agora</span><span class="valor" id="ent-falta">${brl(falta)}</span></div>
     ${s.lavagem?`<p class="mudo pequeno">☔ O cliente ganha ${D.config.chuvaHoras} h de garantia de chuva.</p>`:''}
@@ -956,12 +1020,12 @@ function desenharEntrega(){
     <button class="btn sec bloco" style="margin-top:10px" onclick="fecharModal()"><span>Voltar</span></button>`);
 }
 function atualizarTotalEntrega(){
-  const a = D.at.find(x=>x.id===entrega.id), sinal = a.sinal?D.config.sinal:0;
+  const a = D.at.find(x=>x.id===entrega.id), sinal = a.sinal && !pixNaoConferido(a) ? D.config.sinal : 0;
   document.getElementById('ent-falta').textContent = brl(Math.max(0,totalEntrega()-sinal));
 }
 async function finalizar(id,forma){
   const a = D.at.find(x=>x.id===id), e = entrega, cid = donoAt(a), total = totalEntrega();
-  const sinal = a.sinal?D.config.sinal:0, extra = Number(e.extra)||0;
+  const pixPendente = pixNaoConferido(a), sinal = a.sinal && !pixPendente ? D.config.sinal : 0, extra = Number(e.extra)||0;
   const pontos = e.resgate ? 0 : Math.floor(total) * (noClube(cid)?2:1);
   const campos = { status:'entregue', pago:true, forma_pagto:forma, valor:total, valor_tabela:a.valorTabela ?? a.valor,
     desconto_pct:e.desconto, extra_desc: extra ? (e.extraDesc.trim()||'Extra') : null, extra_valor: extra || null,
@@ -969,6 +1033,8 @@ async function finalizar(id,forma){
   if(D.profissionais.length) campos.profissional_id = e.prof || null;
   // Se o total ficou abaixo do sinal (ex.: resgate de pontos), o sinal é devolvido ou fica como parte do pagamento
   if(sinal && total < sinal) campos.sinal_status = e.resgate ? 'devolvido' : 'usado';
+  // Pix do sinal nunca conferido: o cliente pagou o valor todo na entrega, sem sinal
+  if(pixPendente){ campos.sinal = false; campos.sinal_status = null; }
   entrega = null; fecharModal();
   const ok = await acao(async()=>{
     await q(sb.from('atendimentos').update(campos).eq('id',id));
@@ -1162,7 +1228,7 @@ function desenharNovoAg(){
     const dur = novoAg.servicoId ? servico(novoAg.servicoId).dur : 40;
     if(ag.hora && !cabe(ag.data,ag.hora,dur) ) ag.hora = null;
     h += `<div class="linha entre">${placaHTML(v.placa,true)}<span class="pequeno">${esc(v.modelo)} · ${esc(cliente(v.clienteId).nome)}</span></div><button class="link" onclick="novoAg.placa='';desenharNovoAg()">Trocar</button>
-      <div class="traco">SERVIÇO</div>${D.servicos.filter(s=>s.precos[v.porte]!=null).map(s=>`<button class="servico ${novoAg.servicoId===s.id?'on':''}" onclick="novoAg.servicoId='${s.id}';desenharNovoAg()"><b class="pequeno">${esc(s.nome)}</b><span class="valor" style="font-size:16px">${brl(s.precos[v.porte])}</span></button>`).join('')}
+      <div class="traco">SERVIÇO</div>${servicosAtivos().filter(s=>s.precos[v.porte]!=null).map(s=>`<button class="servico ${novoAg.servicoId===s.id?'on':''}" onclick="novoAg.servicoId='${s.id}';desenharNovoAg()"><b class="pequeno">${esc(s.nome)}</b><span class="valor" style="font-size:16px">${brl(s.precos[v.porte])}</span></button>`).join('')}
       ${novoAg.servicoId?seletorDiaHora(dur, null, true).replace(/render\(\)/g,'desenharNovoAg()'):''}
       ${novoAg.servicoId&&ag.data?(()=>{ const el = clubeElegivel(v.clienteId, novoAg.servicoId, ag.data); novoAg.clube = el.ok && novoAg.usarClube!==false; return avisoClubeHTML(v.clienteId, el, novoAg.clube, 'novoAg.usarClube=this.checked;desenharNovoAg()'); })():''}
       <button class="btn bloco" style="margin-top:14px" ${novoAg.servicoId&&ag.hora?'':'disabled'} onclick="salvarNovoAgDono()"><span>${novoAg.clube?'Agendar pelo Clube':'Agendar'}</span></button>`;
@@ -1337,12 +1403,13 @@ function verMovimento(i){
         ${linha('Extra', a.extra?`${esc(a.extra.desc)} · ${brl(a.extra.valor)}`:'')}
         ${linha('Desconto', a.desconto?a.desconto+'%':'')}
         ${linha('Valor cobrado', brl(a.valor))}
-        ${linha('Sinal', a.sinal?`${brl(D.config.sinal)} (${{pago:'pago, descontado na entrega',usado:'usado no pagamento',devolvido:'devolvido',retido:'ficou com a loja'}[a.sinalStatus]||a.sinalStatus||'pago'})`:'')}
+        ${linha('Sinal', a.sinal?`${brl(D.config.sinal)} (${{aguardando:'aguardando conferência',pago:'pago, descontado na entrega',usado:'usado no pagamento',devolvido:'devolvido',retido:'ficou com a loja'}[a.sinalStatus]||a.sinalStatus||'pago'})`:'')}
         ${linha('Pagamento', a.forma?esc(a.forma):'')}
         ${linha('Pontos', a.status==='entregue'?String(a.pontos||0):'')}
         ${linha('Origem', {app:'agendado pelo app',loja:'agendado pela loja',balcao:'atendido no balcão'}[a.origem]||'')}
         ${linha('Status', a.status==='faltou'?'não veio':a.status==='cancelado'?`cancelado por ${a.canceladoPor||'—'}${a.motivoCancel?': '+esc(a.motivoCancel):''}`:esc(a.status))}
       </table>
+      ${a.status==='entregue'?`<div class="grade" style="grid-template-columns:1fr 1fr;margin-top:12px"><button class="btn peq" onclick="corrigirEntrega('${a.id}')"><span>Corrigir valor/forma</span></button><button class="btn sec peq" style="border-color:#8a2424" onclick="desfazerEntrega('${a.id}')"><span>Desfazer entrega</span></button></div>`:''}
       ${a.vistoria?`<button class="btn sec bloco" style="margin-top:12px" onclick="verVistoria('${a.id}')"><span>Ver vistoria de entrada</span></button>`:''}
       <button class="btn sec bloco" style="margin-top:8px" onclick="fecharModal();buscaPlaca='${a.placa}';irPara('balcao')"><span>Abrir ficha do veículo</span></button>
       <button class="btn sec bloco" style="margin-top:8px" onclick="fecharModal()"><span>Fechar</span></button>`);
@@ -1359,6 +1426,38 @@ function verMovimento(i){
     <button class="btn bloco" onclick="salvarDetalhesMov('${m.id}','${m.tipo}')"><span>Salvar detalhes</span></button>
     <button class="btn sec bloco" style="margin-top:8px;border-color:#8a2424" onclick="apagarLancamento('${m.id}')"><span>Apagar lançamento</span></button>
     <button class="btn sec bloco" style="margin-top:8px" onclick="fecharModal()"><span>Fechar</span></button>`);
+}
+/* ---- Serviço lançado errado: corrigir o valor/forma ou desfazer a entrega (volta para "Pronto" e sai do Caixa) ---- */
+function corrigirEntrega(id){
+  const a = D.at.find(x=>x.id===id);
+  abrirModal(`<h2 style="margin-top:0">Corrigir serviço</h2><p class="sub">${esc(servico(a.servicoId).nome)} · ${esc(a.placa)} · ${fmtData(a.data)}</p>
+    <label class="campo" style="margin-top:12px">Valor cobrado (R$)<input id="ce-v" type="number" step="0.01" min="0" inputmode="decimal" value="${a.valor}"></label>
+    <label class="campo">Forma de pagamento<select id="ce-f">${['Pix','Cartão','Dinheiro'].map(f=>`<option ${a.forma===f?'selected':''}>${f}</option>`).join('')}</select></label>
+    ${seletorProfissional(a.profissionalId||'', 'corrigirProf=this.value')}
+    <p class="mudo pequeno">Os pontos do cliente são recalculados pelo novo valor.${a.sinal?` O sinal de ${brl(D.config.sinal)} faz parte do valor cobrado.`:''}</p>
+    <button class="btn bloco" onclick="salvarCorrecao('${id}')"><span>Salvar correção</span></button>
+    <button class="btn sec bloco" style="margin-top:8px" onclick="fecharModal()"><span>Voltar</span></button>`);
+  corrigirProf = a.profissionalId || '';
+}
+let corrigirProf = '';
+function salvarCorrecao(id){
+  const a = D.at.find(x=>x.id===id), valor = Math.max(0, Math.round((Number(document.getElementById('ce-v').value)||0)*100)/100), forma = document.getElementById('ce-f').value;
+  const pontos = a.resgate ? 0 : Math.floor(valor) * (noClube(donoAt(a))?2:1);
+  const campos = {valor, forma_pagto:forma, pontos};
+  if(D.profissionais.length) campos.profissional_id = corrigirProf || null;
+  fecharModal();
+  return acao(()=>q(sb.from('atendimentos').update(campos).eq('id',id)), 'Serviço corrigido no Caixa.');
+}
+function desfazerEntrega(id){
+  const a = D.at.find(x=>x.id===id);
+  if(!confirm(`Desfazer a entrega de ${servico(a.servicoId).nome} (${a.placa})?\n\nO valor de ${brl(a.valor)} sai do Caixa, os pontos do cliente são retirados${a.resgate?' e a lavagem grátis volta para ele':''} e o carro volta para "Pronto" na fila de ${fmtData(a.data)}.\n\nO estoque já baixado não volta sozinho (ajuste em Estoque, se precisar).`)) return;
+  fecharModal();
+  return acao(async()=>{
+    if(a.resgate) await q(sb.from('resgates').delete().eq('atendimento_id',id));
+    await q(sb.from('atendimentos').update({status:'pronto', pago:false, forma_pagto:null, pontos:0, resgate:false,
+      valor:(a.clube||a.chuva) ? 0 : (a.valorTabela ?? a.valor), extra_desc:null, extra_valor:null, desconto_pct:0,
+      ...(a.sinalStatus==='usado'?{sinal_status:'pago'}:{})}).eq('id',id));
+  }, 'Entrega desfeita. O carro voltou para "Pronto".');
 }
 function salvarDetalhesMov(id, tipo){
   const pessoa = document.getElementById('mv-pessoa').value.trim(), detalhes = document.getElementById('mv-det').value.trim();
@@ -1479,7 +1578,7 @@ function editarProduto(pid){
       <label class="campo">${pid?'Custo/un':'Tenho hoje'}<input id="ep-x" type="number" step="0.01" value="${pid?p.custo:''}"></label>
     </div>
     <div class="traco">QUANTO GASTA POR SERVIÇO</div><p class="mudo pequeno" style="margin-top:-4px">Deixe vazio se o serviço não usa este produto.</p>
-    <table class="tabela">${D.servicos.map(s=>`<tr><td>${esc(s.nome)}</td><td><input class="ep-c" data-sid="${s.id}" type="number" step="0.01" inputmode="decimal" value="${p.consumo?.[s.id]||''}" aria-label="Consumo em ${esc(s.nome)}"></td></tr>`).join('')}</table>
+    <table class="tabela">${servicosAtivos().map(s=>`<tr><td>${esc(s.nome)}</td><td><input class="ep-c" data-sid="${s.id}" type="number" step="0.01" inputmode="decimal" value="${p.consumo?.[s.id]||''}" aria-label="Consumo em ${esc(s.nome)}"></td></tr>`).join('')}</table>
     <button class="btn bloco" style="margin-top:12px" onclick="salvarProduto('${pid||''}')"><span>Salvar</span></button>
     ${pid?`<button class="btn sec bloco" style="margin-top:8px" onclick="if(confirm('Excluir ${esc(p.nome)} do estoque?')){fecharModal();acao(()=>q(sb.from('produtos').update({ativo:false}).eq('id','${pid}')),'Produto excluído.')}"><span>Excluir produto</span></button>`:''}
     <button class="btn sec bloco" style="margin-top:8px" onclick="fecharModal()"><span>Voltar</span></button>`);
@@ -1541,7 +1640,7 @@ function telaBalcao(){
     h += `<div class="traco">VISTORIAS DE ENTRADA</div><div class="painel">${comFotos.map(a=>`<div class="fila" style="grid-template-columns:52px 1fr auto"><span class="hora">${fmtData(a.data)}</span><div class="pequeno">${a.vistoria.fotos.length?a.vistoria.fotos.length+' foto'+(a.vistoria.fotos.length===1?'':'s'):'fotos expiradas'} · ${a.vistoria.avarias.length?esc(a.vistoria.avarias.join(', ')):'sem avarias aparentes'}</div><button class="btn sec peq" onclick="verVistoria('${a.id}')"><span>Ver</span></button></div>`).join('')}</div>`;
   }
   if(garantia) h += `<div class="painel" style="border-color:#2a45b8"><b>☔ Garantia de chuva válida</b><p class="sub">Lavou em ${fmtData(garantia.data)}. Se choveu, a relavagem sai de graça.</p><button class="btn bloco" style="margin-top:10px" onclick="atenderAgora('${v.placa}','${garantia.servicoId}',true)"><span>Fazer relavagem de chuva</span></button></div>`;
-  const servs = D.servicos.filter(s=>s.precos[v.porte]!=null);
+  const servs = servicosAtivos().filter(s=>s.precos[v.porte]!=null);
   if(noClube(c.id)){
     const lav = servs.filter(s=>s.noClube), el = lav.length ? clubeElegivel(c.id, lav[0].id, iso(HOJE)) : {ok:false, motivo:'Nenhum serviço do Clube para este tipo de veículo.'};
     h += `<div class="traco">PELO CLUBE</div>` + (el.ok
@@ -1844,8 +1943,12 @@ function registrarAviso(cid){ setTimeout(()=>acao(()=>q(sb.from('avisos_retorno'
 function telaAjustes(){
   let h = `<div style="margin-top:18px"><h1>Ajustes</h1><p class="sub">Preços por porte, capacidade e regras.</p></div>
   <div class="traco">TABELA DE PREÇOS</div><div class="painel rolagem"><table class="tabela"><tr><th>Serviço</th>${Object.values(PORTES).map(p=>`<th>${p}</th>`).join('')}</tr>
-    ${D.servicos.map(s=>`<tr><td>${esc(s.nome)}</td>${Object.keys(PORTES).map(p=>s.precos[p]==null?'<td class="mudo">—</td>':`<td><input type="number" step="0.1" min="0" inputmode="decimal" value="${s.precos[p]}" onchange="salvarServico('${s.id}',{preco_${p}:Math.max(0,Number(this.value))})" aria-label="${esc(s.nome)} ${PORTES[p]}"></td>`).join('')}</tr>`).join('')}
-  </table></div>
+    ${servicosAtivos().map(s=>`<tr><td><button class="link" style="padding:0;text-align:left" onclick="editarServico('${s.id}')">${esc(s.nome)} ✎</button></td>${Object.keys(PORTES).map(p=>s.precos[p]==null?'<td class="mudo">—</td>':`<td><input type="number" step="0.1" min="0" inputmode="decimal" value="${s.precos[p]}" onchange="salvarServico('${s.id}',{preco_${p}:Math.max(0,Number(this.value))})" aria-label="${esc(s.nome)} ${PORTES[p]}"></td>`).join('')}</tr>`).join('')}
+  </table>
+    <p class="mudo pequeno">Toque no nome para editar tudo do serviço (duração, "a partir de", o que inclui) ou desativar.</p>
+    <button class="btn bloco" style="margin-top:6px" onclick="editarServico()"><span>+ Cadastrar serviço</span></button>
+    ${D.servicos.some(s=>!s.ativo)?`<p class="mudo pequeno" style="margin:12px 0 4px"><b>Desativados</b> (não aparecem para agendar; o histórico fica)</p>${D.servicos.filter(s=>!s.ativo).map(s=>`<div class="linha entre pequeno" style="margin-top:4px"><span>${esc(s.nome)}</span><button class="link pequeno" style="padding:0" onclick="salvarServico('${s.id}',{ativo:true})">Reativar</button></div>`).join('')}`:''}
+  </div>
   <div class="traco">HORÁRIO DE FUNCIONAMENTO</div><div class="painel">
     <p class="mudo pequeno" style="margin-top:0">Os clientes só conseguem agendar dentro destes horários.</p>
     ${[1,2,3,4,5,6,0].map(i=>{ const d = D.config.semana[i]; return `<div class="dias-semana">
@@ -1863,11 +1966,11 @@ function telaAjustes(){
   </div>
   <div class="traco">O QUE ENTRA NO CLUBE</div><div class="painel">
     <p class="mudo pequeno" style="margin-top:0">Marque os serviços que o assinante pode usar sem pagar (${D.config.clubeLavagens} por mês, de segunda a sexta). Os demais têm 10% de desconto.</p>
-    ${D.servicos.map(s=>`<label class="check"><input type="checkbox" ${s.noClube?'checked':''} onchange="salvarServico('${s.id}',{no_clube:this.checked})"> ${esc(s.nome)} <span class="mudo pequeno">(${Object.entries(s.precos).filter(([,v])=>v!=null).map(([k])=>PORTES[k]).join(', ')})</span></label>`).join('')}
+    ${servicosAtivos().map(s=>`<label class="check"><input type="checkbox" ${s.noClube?'checked':''} onchange="salvarServico('${s.id}',{no_clube:this.checked})"> ${esc(s.nome)} <span class="mudo pequeno">(${Object.entries(s.precos).filter(([,v])=>v!=null).map(([k])=>PORTES[k]).join(', ')})</span></label>`).join('')}
     <label class="campo">Quantas por mês<input type="number" min="1" max="31" value="${D.config.clubeLavagens}" onchange="salvarConfig({clube_lavagens:Math.min(31,Math.max(1,Math.round(Number(this.value))))})"></label>
   </div>
   <div class="traco">DURAÇÃO DOS SERVIÇOS</div><div class="painel rolagem"><table class="tabela"><tr><th>Serviço</th><th>Minutos</th></tr>
-    ${D.servicos.map(s=>`<tr><td>${esc(s.nome)}</td><td><input type="number" min="10" step="10" value="${s.dur}" onchange="salvarServico('${s.id}',{duracao_min:Math.max(10,Math.round(Number(this.value)))})" aria-label="Duração ${esc(s.nome)}"></td></tr>`).join('')}
+    ${servicosAtivos().map(s=>`<tr><td>${esc(s.nome)}</td><td><input type="number" min="10" step="10" value="${s.dur}" onchange="salvarServico('${s.id}',{duracao_min:Math.max(10,Math.round(Number(this.value)))})" aria-label="Duração ${esc(s.nome)}"></td></tr>`).join('')}
   </table><p class="mudo pequeno">A duração define quantos horários o serviço ocupa na agenda.</p></div>
   <div class="traco">OPERAÇÃO</div><div class="painel">
     <label class="campo">Carros atendidos ao mesmo tempo<input type="number" min="1" value="${D.config.capacidade}" onchange="salvarConfig({capacidade:Math.max(1,Math.round(Number(this.value)))})"></label>
@@ -1957,6 +2060,47 @@ function telaConta(){
 // Cada campo de Ajustes grava na hora e recarrega (as regras do servidor passam a usar o novo valor)
 const salvarConfig = campos => acao(()=>q(sb.from('config').update(campos).eq('id',1)), 'Salvo.');
 const salvarServico = (id, campos) => acao(()=>q(sb.from('servicos').update(campos).eq('id',id)), 'Salvo.');
+/* ---- Serviços: o dono cadastra, edita e desativa (desativar esconde da agenda, mas mantém o histórico) ---- */
+function editarServico(sid){
+  const s = sid ? servico(sid) : {nome:'', dur:60, precos:{carro:null, suv:null, moto:null}, apartir:false, lavagem:false, noClube:false, inclui:'', destaque:''};
+  abrirModal(`<h2 style="margin-top:0">${sid?'Editar serviço':'Novo serviço'}</h2>
+    <label class="campo">Nome<input id="es-nome" value="${esc(s.nome)}" placeholder="Ex.: Lavagem de motor"></label>
+    <label class="campo">Duração (minutos)<input id="es-dur" type="number" min="10" step="10" value="${s.dur}"></label>
+    <p class="mudo pequeno" style="margin:0 0 4px">Preço por tipo de veículo. Deixe vazio o que o serviço não atende.</p>
+    <div class="grade" style="grid-template-columns:1fr 1fr 1fr">${Object.entries(PORTES).map(([k,n])=>`<label class="campo">${n}<input id="es-p-${k}" type="number" step="0.1" min="0" inputmode="decimal" value="${s.precos[k]??''}"></label>`).join('')}</div>
+    <label class="check"><input type="checkbox" id="es-apartir" ${s.apartir?'checked':''}> Preço "a partir de" (ajusta na entrega)</label>
+    <label class="check"><input type="checkbox" id="es-lav" ${s.lavagem?'checked':''}> É uma lavagem (ganha garantia de chuva e o aviso "hora de lavar de novo")</label>
+    <label class="check"><input type="checkbox" id="es-clube" ${s.noClube?'checked':''}> Entra no Clube (assinante não paga)</label>
+    <label class="campo">O que inclui (aparece para o cliente)<textarea class="obs" id="es-inclui" placeholder="Ex.: desengraxe do motor e proteção das peças">${esc(s.inclui)}</textarea></label>
+    <label class="campo">Selo (opcional)<input id="es-dest" value="${esc(s.destaque||'')}" placeholder="Ex.: novidade"></label>
+    <button class="btn bloco" onclick="salvarServicoCompleto('${sid||''}')"><span>Salvar</span></button>
+    ${sid?`<button class="btn sec bloco" style="margin-top:8px;border-color:#8a2424" onclick="desativarServico('${sid}')"><span>Desativar serviço</span></button>`:''}
+    <button class="btn sec bloco" style="margin-top:8px" onclick="fecharModal()"><span>Voltar</span></button>`);
+}
+function salvarServicoCompleto(sid){
+  const v = id => document.getElementById(id), nome = v('es-nome').value.trim(), dur = Math.round(Number(v('es-dur').value)||0);
+  const preco = k => v('es-p-'+k).value.trim()==='' ? null : Math.max(0, Number(v('es-p-'+k).value)||0);
+  const campos = { nome, duracao_min:dur, preco_carro:preco('carro'), preco_suv:preco('suv'), preco_moto:preco('moto'),
+    a_partir_de:v('es-apartir').checked, lavagem:v('es-lav').checked, no_clube:v('es-clube').checked,
+    inclui:v('es-inclui').value.trim()||null, destaque:v('es-dest').value.trim()||null };
+  if(nome.length<2) return aviso('Informe o nome do serviço.');
+  if(dur<10) return aviso('A duração precisa ser de pelo menos 10 minutos.');
+  if(campos.preco_carro==null && campos.preco_suv==null && campos.preco_moto==null) return aviso('Informe o preço de pelo menos um tipo de veículo.');
+  if(!sid && D.servicos.some(s=>s.nome.trim().toLowerCase()===nome.toLowerCase())) return aviso('Já existe um serviço com esse nome.');
+  fecharModal();
+  if(sid) return acao(()=>q(sb.from('servicos').update(campos).eq('id',sid)), 'Serviço salvo.');
+  // identificador do serviço a partir do nome (ex.: "Lavagem de motor" → lavagem_de_motor)
+  let id = nome.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'').slice(0,30) || 'servico';
+  while(D.servicos.some(s=>s.id===id)) id += '_'+Math.random().toString(36).slice(2,5);
+  const ordem = Math.max(0, ...D.servicos.map(s=>s.ordem||0)) + 1;
+  return acao(()=>q(sb.from('servicos').insert({id, ordem, ativo:true, ...campos})), 'Serviço cadastrado. Já aparece para agendar.');
+}
+function desativarServico(sid){
+  const s = servico(sid), futuros = D.at.filter(a=>a.servicoId===sid && a.status==='agendado' && a.data>=iso(HOJE)).length;
+  if(!confirm(`Desativar "${s.nome}"? Ele some da agenda e do app do cliente. O histórico continua.${futuros?`\n\nAtenção: ${futuros} agendamento(s) futuro(s) usam este serviço e continuam marcados.`:''}`)) return;
+  fecharModal();
+  return acao(()=>q(sb.from('servicos').update({ativo:false}).eq('id',sid)), 'Serviço desativado.');
+}
 const salvarLoja = campos => acao(()=>q(sb.from('config').update({loja:{...D.loja, ...campos}}).eq('id',1)), 'Salvo.');
 
 function mudarExpediente(i,campo,valor){
@@ -2310,7 +2454,27 @@ function editarCliente(cid, erro=''){
     <label class="campo">WhatsApp<input id="ec-fone" inputmode="tel" value="${fmtFone(c.fone)}"></label>
     <label class="check"><input type="checkbox" id="ec-cons" ${c.consente?'checked':''}> Autorizou receber lembretes e ofertas pelo WhatsApp</label>
     <button class="btn bloco" onclick="salvarEdicao('${cid}')"><span>Salvar</span></button>
-    <button class="btn sec bloco" style="margin-top:8px" onclick="fecharModal()"><span>Cancelar</span></button>`);
+    <button class="btn sec bloco" style="margin-top:8px" onclick="fecharModal()"><span>Cancelar</span></button>
+    <button class="btn sec bloco" style="margin-top:16px;border-color:#8a2424" onclick="excluirCliente('${cid}')"><span>Excluir cliente</span></button>`);
+}
+// Excluir cliente: cadastro errado/duplicado sai de vez; com serviço pago, só o dono, avisando quanto sai do Caixa
+async function excluirCliente(cid){
+  const c = cliente(cid), placas = veiculosDe(cid).map(v=>v.placa);
+  const ats = D.at.filter(a=>a.clienteId===cid || placas.includes(a.placa)), pagos = ats.filter(a=>a.status==='entregue');
+  const soma = pagos.reduce((s,a)=>s+a.valor,0);
+  if(pagos.length && !souDono()) return aviso(`${c.nome} tem ${pagos.length} serviço(s) pago(s). Só o dono pode excluir.`);
+  const txt = pagos.length
+    ? `⚠ ${c.nome} tem ${pagos.length} serviço(s) entregue(s), somando ${brl(soma)}.\n\nExcluir apaga TUDO: cadastro, ${placas.length} carro(s), agendamentos, histórico, pontos, fotos e o login do app. Esses ${brl(soma)} SAEM do Caixa (o faturamento dos dias em que foram feitos vai diminuir).\n\nLançamentos manuais ligados a ele (ex.: mensalidade do Clube) continuam no Caixa.\n\nNão dá para desfazer. Excluir mesmo assim?`
+    : `Excluir ${c.nome} de vez?\n\nApaga o cadastro, ${placas.length} carro(s), ${ats.length} agendamento(s) e o login do app. Não dá para desfazer.`;
+  if(!confirm(txt)) return;
+  if(pagos.length && prompt(`Para confirmar, digite EXCLUIR`)?.trim().toUpperCase()!=='EXCLUIR') return aviso('Exclusão cancelada.');
+  fecharModal();
+  await acao(async()=>{
+    // fotos no Storage primeiro (o banco não apaga arquivos)
+    const caminhos = ats.flatMap(a=>[...(a.vistoria?.fotos||[]), ...(a.depois?.fotos||[])]).map(f=>f.caminho).filter(Boolean);
+    if(caminhos.length) await sb.storage.from('vistorias').remove(caminhos);
+    await q(sb.rpc('excluir_cliente', {p_cliente:cid, p_com_pagos: pagos.length>0}));
+  }, `${c.nome} excluído.`);
 }
 function salvarEdicao(cid){
   const c = cliente(cid), nome = document.getElementById('ec-nome').value.trim(), fone = soDig(document.getElementById('ec-fone').value);
