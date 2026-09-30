@@ -187,3 +187,5 @@ body.ocupado::after{content:"";position:fixed;left:0;right:0;top:0;height:3px;z-
 @keyframes carga{from{background-position:200% 0}to{background-position:-200% 0}}
 .topo #btn-sair{font-size:14px}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+/* Número da versão no rodapé (confere se o celular já pegou a atualização) */
+.versao{text-align:center;color:var(--prata-escura);font-size:11px;opacity:.6;margin:22px 0 6px}

@@ -448,24 +448,27 @@ function avisoLicenca(){
     ${licenca.mensagem?`<br>${esc(licenca.mensagem)}`:''}
     ${licenca.contato?` <a style="color:inherit;font-weight:700" target="_blank" rel="noopener" href="https://api.whatsapp.com/send?phone=${esc(soDig(licenca.contato))}">Falar com o suporte</a>`:''}</div>`;
 }
+// Número da versão (subir junto com VERSAO do sw.js): mostra no rodapé se o celular já pegou a atualização
+const VERSAO_APP = 9;
+const pintarTela = html => { document.getElementById('tela').innerHTML = html + `<p class="versao">versão ${VERSAO_APP}</p>`; };
 function render(){
   if(!D) return;
   document.getElementById('btn-sair').hidden = !sessao;
   // Suporte (desenvolvedor): conta 'suporte' só vê a Licença; como dono, a Licença abre mesmo com o sistema bloqueado
   if(sessao && perfil && (modo==='suporte' || (suporte && licenca?.status==='bloqueada'))){
     document.querySelector('.nav').style.display='none';
-    document.getElementById('tela').innerHTML = telaLicenca();
+    pintarTela(telaLicenca());
     return;
   }
   if(sessao && perfil && licenca?.status==='bloqueada'){
     document.querySelector('.nav').style.display='none';
-    document.getElementById('tela').innerHTML = telaBloqueada();
+    pintarTela(telaBloqueada());
     return;
   }
   const logado = !!sessao && (ehEquipe() || !!cliente(clienteAtual));
   if(!logado){
     document.querySelector('.nav').style.display='none';
-    document.getElementById('tela').innerHTML = sessao && perfil ? `<div class="painel vazio" style="margin-top:30px">Esta conta ainda não está ligada a um cadastro de cliente. Fale com a Vizzani.<br><button class="btn sec" style="margin-top:12px" onclick="sair()"><span>Sair</span></button></div>` : telaEntrar();
+    pintarTela(sessao && perfil ? `<div class="painel vazio" style="margin-top:30px">Esta conta ainda não está ligada a um cadastro de cliente. Fale com a Vizzani.<br><button class="btn sec" style="margin-top:12px" onclick="sair()"><span>Sair</span></button></div>` : telaEntrar());
     return;
   }
   document.querySelector('.nav').style.display='';
@@ -473,7 +476,7 @@ function render(){
   const f = {inicio:telaInicio,agendar:telaAgendar,historico:telaHistorico,clube:telaClube,hoje:telaHoje,agenda:telaAgendaDono,balcao:telaBalcao,caixa:telaCaixa,clientes:telaClientes,retorno:telaClientes,ajustes:telaAjustes,licenca:telaLicenca,estoque:telaEstoque,conta:telaConta}[aba] || (ehEquipe()?telaHoje:telaInicio);
   // Funcionário nunca abre Caixa nem Ajustes (mesmo por link ou botão antigo)
   if(modo==='funcionario' && ['caixa','ajustes','licenca'].includes(aba)){ aba = aba==='caixa' ? 'estoque' : 'conta'; return render(); }
-  document.getElementById('tela').innerHTML = avisoLicenca() + f();
+  pintarTela(avisoLicenca() + f());
 }
 /* ================= CLIENTE ================= */
 function barraCliente(c){
@@ -514,7 +517,7 @@ function telaInicio(){
   const proximos = D.at.filter(a=>a.data>iso(HOJE) && a.status==='agendado' && vs.some(v=>v.placa===a.placa)).sort((a,b)=>(a.data+a.hora).localeCompare(b.data+b.hora));
   const mc = D.meuClube, noClubeAtivo = mc && ['em_dia','aberto'].includes(mc.situacao);
   let h = barraCliente(c) + `<div class="linha entre" style="margin-top:18px"><h1>Olá, ${esc(c.nome.split(' ')[0])}</h1>${noClubeAtivo?'<span class="selo azul" style="font-size:13px">⭐ Clube</span>':''}</div>`
-    + cartaoClubeCliente(mc);
+    + cartaoClubeCliente(mc) + cartaoLembretes();
 
   hojeAt.forEach(a=>{
     const passo = {agendado:1,recebido:2,pronto:3}[a.status];
@@ -1119,6 +1122,20 @@ async function desligarPush(){
     localStorage.removeItem(chavePush());
   }catch(e){ console.error(e); }
 }
+// Cartão no Início do cliente: convida a ativar os lembretes (some quando ativa ou toca "Agora não" por 30 dias)
+const chaveDispensa = () => 'vizzani-lembrete-dispensado-' + (perfil?.id || '');
+function cartaoLembretes(){
+  if(!PUSH_PRONTO || pushAtivo()) return '';
+  try{ const d = Number(localStorage.getItem(chaveDispensa())||0); if(d && Date.now()-d < 30*86400000) return ''; }catch(e){}
+  const agoraNao = `<button class="btn sec peq" onclick="dispensarLembretes()"><span>Agora não</span></button>`;
+  const cartao = (texto, botao) => `<div class="painel" style="margin-top:14px;border-color:#2a45b8"><b>🔔 Ative os lembretes para não esquecer do seu horário</b>
+    <p class="mudo pequeno" style="margin:6px 0 0">${texto}</p><div class="acoes">${botao}${agoraNao}</div></div>`;
+  if(ehIphone() && !appInstalado()) return cartao('No iPhone, os lembretes só chegam com o app na tela inicial. Instale e abra por lá para ativar.', `<button class="btn peq" onclick="ajudaIphone()"><span>Como instalar</span></button>`);
+  if(!suportaPush()) return '';
+  if(Notification.permission==='denied') return cartao('Os avisos da Vizzani estão bloqueados neste celular. Para receber, libere as notificações nas configurações do navegador ou do celular.', '');
+  return cartao('A gente avisa 1 dia antes e 2 horas antes do seu horário, e quando o carro ficar pronto. Nada de propaganda.', `<button class="btn peq" onclick="ativarNotificacoes()"><span>Ativar lembretes</span></button>`);
+}
+function dispensarLembretes(){ try{ localStorage.setItem(chaveDispensa(), String(Date.now())); }catch(e){} render(); }
 // Botão para a equipe (Hoje, Ajustes, Conta)
 function botaoAvisosEquipe(estilo=''){
   if(!PUSH_PRONTO) return '';
