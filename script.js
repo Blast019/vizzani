@@ -449,7 +449,7 @@ function avisoLicenca(){
     ${licenca.contato?` <a style="color:inherit;font-weight:700" target="_blank" rel="noopener" href="https://api.whatsapp.com/send?phone=${esc(soDig(licenca.contato))}">Falar com o suporte</a>`:''}</div>`;
 }
 // Número da versão (subir junto com VERSAO do sw.js): mostra no rodapé se o celular já pegou a atualização
-const VERSAO_APP = 9;
+const VERSAO_APP = 10;
 const pintarTela = html => { document.getElementById('tela').innerHTML = html + `<p class="versao">versão ${VERSAO_APP}</p>`; };
 function render(){
   if(!D) return;
@@ -2050,7 +2050,7 @@ function ajustesEquipeHTML(){
   return `<div class="traco">EQUIPE</div><div class="painel">
     <p class="mudo pequeno" style="margin-top:0">O funcionário entra por "Acesso da equipe" com o WhatsApp e a senha. Ele faz a operação (Hoje, Agenda, Balcão, Clientes, estoque), mas não vê o Caixa, os valores totais nem os Ajustes.</p>
     ${D.equipe.length?D.equipe.map(f=>`<div class="fila" style="grid-template-columns:1fr auto"><div><b>${esc(f.nome)}</b> ${f.ativo?'<span class="selo verde">ativo</span>':'<span class="selo vermelho">sem acesso</span>'}<div class="mudo pequeno">${fmtFone(f.fone)}</div></div>
-      <div class="acoes" style="margin:0;justify-content:flex-end">${f.ativo?`<button class="btn sec peq" onclick="senhaFuncionario('${f.id}')"><span>Nova senha</span></button>`:''}<button class="btn sec peq" onclick="acessoFuncionario('${f.id}',${!f.ativo})"><span>${f.ativo?'Desativar':'Reativar'}</span></button></div></div>`).join(''):'<p class="mudo pequeno">Nenhum funcionário cadastrado.</p>'}
+      <div class="acoes" style="margin:0;justify-content:flex-end">${f.ativo?`<button class="btn sec peq" onclick="senhaFuncionario('${f.id}')"><span>Nova senha</span></button>`:''}<button class="btn sec peq" onclick="acessoFuncionario('${f.id}',${!f.ativo})"><span>${f.ativo?'Desativar':'Reativar'}</span></button>${f.ativo?'':`<button class="btn sec peq" style="border-color:#8a2424" onclick="excluirFuncionario('${f.id}')"><span>Excluir</span></button>`}</div></div>`).join(''):'<p class="mudo pequeno">Nenhum funcionário cadastrado.</p>'}
     <button class="btn bloco" style="margin-top:10px" onclick="novoFuncionario()"><span>+ Cadastrar funcionário</span></button>
   </div>
   <div class="traco">PROFISSIONAIS</div><div class="painel">
@@ -2087,6 +2087,12 @@ function acessoFuncionario(id, ativo){
   const f = D.equipe.find(x=>x.id===id);
   if(!ativo && !confirm(`Tirar o acesso de ${f.nome}? Ele sai do app na hora e não entra mais. O histórico dele fica guardado.`)) return;
   return acao(()=>chamarConta({acao:'acesso_funcionario', perfil_id:id, ativo}), ativo?`Acesso de ${f.nome} reativado.`:`Acesso de ${f.nome} desativado.`);
+}
+// Excluir de vez: só aparece para quem já está desativado; o histórico de serviços continua com o nome
+function excluirFuncionario(id){
+  const f = D.equipe.find(x=>x.id===id);
+  if(!confirm(`Excluir ${f.nome} de vez?\n\nO login dele é apagado e não dá para reativar. Os serviços que ele fez continuam no histórico com o nome dele.`)) return;
+  return acao(()=>chamarConta({acao:'excluir_funcionario', perfil_id:id}), `${f.nome} excluído.`);
 }
 function novoProfissional(){
   const nome = (prompt('Nome do profissional:')||'').trim(); if(!nome) return;

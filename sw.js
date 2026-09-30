@@ -2,7 +2,7 @@
 // Deixa o app instalável e abre a tela mesmo com internet ruim.
 // Arquivos do app: tenta a rede primeiro (sempre a versão mais nova) e usa a cópia guardada se estiver sem conexão.
 // Dados (Supabase) nunca passam pelo cache.
-const VERSAO = 'vizzani-v9';
+const VERSAO = 'vizzani-v10';
 const ARQUIVOS = ['./', './index.html', './style.css', './script.js', './config.js', './logo.jpg',
   './icon-192.png', './icon-512.png', './manifest.webmanifest'];
 
