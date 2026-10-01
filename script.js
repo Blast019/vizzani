@@ -314,7 +314,7 @@ const placaHTML = (p,mini) => `<span class="placa${mini?' mini':''}" aria-label=
 function aviso(msg){ const el=document.getElementById('aviso'); el.textContent=msg; el.classList.add('show'); clearTimeout(aviso.t); aviso.t=setTimeout(()=>el.classList.remove('show'),2600); }
 function linkZap(fone,texto){ return 'https://api.whatsapp.com/send?phone=55'+fone.replace(/\D/g,'')+'&text='+encodeURIComponent(texto); }
 function abrirModal(html){ document.getElementById('modal').innerHTML = `<div class="modal-fundo" onclick="if(event.target===this)fecharModal()"><div class="modal" role="dialog" aria-modal="true">${html}</div></div>`; }
-function fecharModal(){ document.getElementById('modal').innerHTML=''; }
+function fecharModal(){ document.getElementById('modal').innerHTML=''; voltaModal = null; }
 const ICON = {
   casa:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>',
   agenda:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>',
@@ -370,7 +370,12 @@ const souDono = () => modo==='dono';
 // Profissional ligado a quem está logado (padrão do "quem fez o serviço")
 const meuProfissional = () => D.profissionais.find(p=>p.perfilId===perfil?.id && p.ativo)?.id || null;
 const nomeProfissional = id => D.profissionais.find(p=>p.id===id)?.nome || '';
-function irPara(a){ aba=a; render(); window.scrollTo({top:0}); }
+function irPara(a, manterVolta){ if(!manterVolta) voltaTela = null; aba=a; render(); window.scrollTo({top:0}); }
+// Ir para outra tela a partir de uma janela, com "← Voltar" para a tela e a janela de onde saiu
+let voltaTela = null;
+function irComVolta(destino, reabrir, rotulo){ voltaTela = {de:aba, para:destino, reabrir, rotulo}; fecharModal(); irPara(destino, true); }
+function voltarTela(){ const v = voltaTela; voltaTela = null; if(!v) return; aba = v.de; render(); window.scrollTo({top:0}); if(v.reabrir) v.reabrir(); }
+const barraVolta = () => voltaTela && voltaTela.para===aba ? `<button class="link" style="margin-top:14px;padding:0" onclick="voltarTela()">← Voltar para ${esc(voltaTela.rotulo)}</button>` : '';
 function telaBloqueada(){
   const dono = perfil?.papel==='dono', l = licenca || {};
   if(modo==='funcionario') return `<div class="painel" style="margin-top:30px"><h2 style="margin-top:0">Sistema suspenso</h2>
@@ -449,7 +454,7 @@ function avisoLicenca(){
     ${licenca.contato?` <a style="color:inherit;font-weight:700" target="_blank" rel="noopener" href="https://api.whatsapp.com/send?phone=${esc(soDig(licenca.contato))}">Falar com o suporte</a>`:''}</div>`;
 }
 // Número da versão (subir junto com VERSAO do sw.js): mostra no rodapé se o celular já pegou a atualização
-const VERSAO_APP = 10;
+const VERSAO_APP = 11;
 const pintarTela = html => { document.getElementById('tela').innerHTML = html + `<p class="versao">versão ${VERSAO_APP}</p>`; };
 function render(){
   if(!D) return;
@@ -476,7 +481,7 @@ function render(){
   const f = {inicio:telaInicio,agendar:telaAgendar,historico:telaHistorico,clube:telaClube,hoje:telaHoje,agenda:telaAgendaDono,balcao:telaBalcao,caixa:telaCaixa,clientes:telaClientes,retorno:telaClientes,ajustes:telaAjustes,licenca:telaLicenca,estoque:telaEstoque,conta:telaConta}[aba] || (ehEquipe()?telaHoje:telaInicio);
   // Funcionário nunca abre Caixa nem Ajustes (mesmo por link ou botão antigo)
   if(modo==='funcionario' && ['caixa','ajustes','licenca'].includes(aba)){ aba = aba==='caixa' ? 'estoque' : 'conta'; return render(); }
-  pintarTela(avisoLicenca() + f());
+  pintarTela(barraVolta() + avisoLicenca() + f());
 }
 /* ================= CLIENTE ================= */
 function barraCliente(c){
@@ -972,7 +977,7 @@ async function salvarDepois(){
   depois = null; avisarPronto(id);
 }
 async function verFotos(id){
-  const a = D.at.find(x=>x.id===id);
+  const a = D.at.find(x=>x.id===id), volta = voltaModal;
   abrirModal(`<div class="vazio">Carregando fotos…</div>`);
   let antes = [], dep = [];
   try{ [antes, dep] = await Promise.all([urlsFotos(a.vistoria?.fotos), urlsFotos(a.depois?.fotos)]); }catch(e){ aviso(msgErro(e)); }
@@ -980,6 +985,7 @@ async function verFotos(id){
     ${antes.length?`<div class="traco">ANTES</div>${antes.map(f=>`<img class="foto-grande" src="${esc(f)}" alt="Foto da entrada">`).join('')}`:''}
     ${dep.length?`<div class="traco">DEPOIS</div>${dep.map(f=>`<img class="foto-grande" src="${esc(f)}" alt="Foto do depois">`).join('')}`:''}
     ${!antes.length&&!dep.length?'<div class="vazio">As fotos já foram apagadas (ficam guardadas por '+D.config.fotosDias+' dias).</div>':`<p class="mudo pequeno">Para salvar no celular, toque e segure a foto. Elas ficam no app por ${D.config.fotosDias} dias.</p>`}
+    ${volta?`<button class="btn bloco" style="margin-bottom:8px" onclick="voltarModal()"><span>← Voltar</span></button>`:''}
     <button class="btn sec bloco" onclick="fecharModal()"><span>Fechar</span></button>`);
 }
 /* Entrega: valor final ajustável ("a partir de"), extras, desconto do Clube e resgate de pontos */
@@ -1463,7 +1469,7 @@ function verMovimento(i){
       </table>
       ${a.status==='entregue'?`<div class="grade" style="grid-template-columns:1fr 1fr;margin-top:12px"><button class="btn peq" onclick="corrigirEntrega('${a.id}')"><span>Corrigir valor/forma</span></button><button class="btn sec peq" style="border-color:#8a2424" onclick="desfazerEntrega('${a.id}')"><span>Desfazer entrega</span></button></div>`:''}
       ${a.vistoria?`<button class="btn sec bloco" style="margin-top:12px" onclick="verVistoria('${a.id}')"><span>Ver vistoria de entrada</span></button>`:''}
-      <button class="btn sec bloco" style="margin-top:8px" onclick="fecharModal();buscaPlaca='${a.placa}';irPara('balcao')"><span>Abrir ficha do veículo</span></button>
+      <button class="btn sec bloco" style="margin-top:8px" onclick="buscaPlaca='${a.placa}';irComVolta('balcao',()=>verMovimento(${i}),'o Caixa')"><span>Abrir ficha do veículo</span></button>
       <button class="btn sec bloco" style="margin-top:8px" onclick="fecharModal()"><span>Fechar</span></button>`);
   }
   const saida = m.tipo==='saida', cli = m.clienteId ? cliente(m.clienteId) : null;
@@ -1898,7 +1904,7 @@ function abrirCliente(cid){
     </div>
     <div class="traco">CLUBE</div>${clubeHTML}
     <div class="traco">CARROS</div>
-    ${r.vs.length?r.vs.map(v=>`<div class="linha entre" style="margin-bottom:8px">${placaHTML(v.placa,true)}<span class="pequeno">${esc(v.modelo)} · ${PORTES[v.porte]}</span><button class="btn sec peq" onclick="fecharModal();buscaPlaca='${v.placa}';irPara('balcao')"><span>Ficha</span></button></div>`).join(''):'<p class="mudo pequeno">Nenhum carro na conta.</p>'}
+    ${r.vs.length?r.vs.map(v=>`<div class="linha entre" style="margin-bottom:8px">${placaHTML(v.placa,true)}<span class="pequeno">${esc(v.modelo)} · ${PORTES[v.porte]}</span><button class="btn sec peq" onclick="buscaPlaca='${v.placa}';irComVolta('balcao',()=>abrirCliente('${cid}'),'a ficha do cliente')"><span>Ficha</span></button></div>`).join(''):'<p class="mudo pequeno">Nenhum carro na conta.</p>'}
     ${r.proximos.length?`<div class="traco">AGENDADO</div>${r.proximos.map(a=>`<p class="pequeno" style="margin:4px 0">${esc(descAt(a))} · ${esc(a.placa)}</p>`).join('')}`:''}
     <div class="traco">HISTÓRICO</div>
     ${r.entregues.length||r.avulsas.length?`<table class="tabela">${[...r.entregues.map(a=>({data:a.data, txt:esc(servico(a.servicoId)?.nome||'')+' · '+esc(a.placa)+(a.profissionalId&&nomeProfissional(a.profissionalId)?' · '+esc(nomeProfissional(a.profissionalId)):'')+(a.nota?' · '+'★'.repeat(a.nota):''), valor:a.valor, quando:quandoAt(a)})), ...r.avulsas.map(l=>({data:l.data, txt:esc(l.desc)+(l.detalhes?' · '+esc(l.detalhes):''), valor:l.valor, quando:+new Date(l.criadoEm)||0}))]
@@ -1908,6 +1914,7 @@ function abrirCliente(cid){
       <button class="btn sec peq" onclick="editarCliente('${cid}')"><span>Editar</span></button>
       ${r.vs.length?`<button class="btn peq" onclick="fecharModal();novoAgDono();novoAg.placa='${r.vs[0].placa}';desenharNovoAg()"><span>Agendar</span></button>`:''}
       ${c.temLogin?`<button class="btn sec peq" onclick="fecharModal();liberarSenha('${cid}')"><span>Liberar senha</span></button>`:''}
+      ${atendimentosComFotos(cid).length?`<button class="btn sec peq" onclick="fotosCliente('${cid}')"><span>📷 Fotos (${atendimentosComFotos(cid).length})</span></button>`:''}
     </div>
     <button class="btn sec bloco" style="margin-top:10px" onclick="fecharModal()"><span>Fechar</span></button>`);
 }
@@ -2260,7 +2267,7 @@ function receberSemVistoria(){
   return acao(()=>q(sb.from('atendimentos').update({status:'recebido'}).eq('id',id)), 'Carro recebido sem vistoria.');
 }
 async function verVistoria(id){
-  const a = D.at.find(x=>x.id===id), vt = a.vistoria, v = veiculo(a.placa);
+  const a = D.at.find(x=>x.id===id), vt = a.vistoria, v = veiculo(a.placa), volta = voltaModal;
   const quando = new Date(vt.quando);
   abrirModal(`<div class="vazio">Carregando fotos…</div>`);
   let urls = [];
@@ -2274,7 +2281,27 @@ async function verVistoria(id){
     ${ehEquipe()&&vt.fotos.length?`<button class="btn sec bloco" style="margin-bottom:10px" onclick="alternarManter('${a.id}')"><span>${vt.manter?'Liberar exclusão automática':'Manter fotos (cliente reclamou)'}</span></button>`:''}
     ${vt.fotosApagadas?`<div class="info">As ${vt.fotosApagadas} fotos desta entrada foram apagadas após ${D.config.fotosDias} dias. As avarias anotadas continuam registradas.</div>`:''}
     ${urls.map((f,i)=>`<img class="foto-grande" src="${esc(f)}" alt="Foto ${i+1} da entrada">`).join('')}
+    ${volta?`<button class="btn bloco" style="margin-bottom:8px" onclick="voltarModal()"><span>← Voltar</span></button>`:''}
     <button class="btn sec bloco" onclick="fecharModal()"><span>Fechar</span></button>`);
+}
+/* Fotos do cliente (na ficha): vistorias de entrada e fotos do depois de todos os carros dele */
+const atendimentosComFotos = cid => D.at.filter(a=>donoAt(a)===cid && (a.vistoria || a.depois)).sort((a,b)=>(b.data+b.hora).localeCompare(a.data+a.hora));
+let voltaModal = null;   // janela anterior, para o "← Voltar" dentro das fotos
+function voltarModal(){ const v = voltaModal; voltaModal = null; if(v) v(); else fecharModal(); }
+function fotosCliente(cid){
+  const c = cliente(cid), lista = atendimentosComFotos(cid);
+  voltaModal = null;
+  abrirModal(`<h2 style="margin-top:0">Fotos · ${esc(c.nome)}</h2><p class="sub">Vistorias de entrada e fotos do depois. Ficam guardadas por ${D.config.fotosDias} dias.</p>
+    <div class="painel" style="margin-top:12px">${lista.map(a=>{ const nAntes = a.vistoria?.fotos?.length||0, nDepois = a.depois?.fotos?.length||0;
+      return `<div class="fila" style="grid-template-columns:52px 1fr auto"><span class="hora">${fmtData(a.data)}</span><div class="pequeno"><b>${esc(servico(a.servicoId)?.nome||'')}</b> · ${esc(a.placa)}<div class="mudo pequeno">${nAntes||nDepois?`${nAntes} da entrada${nDepois?` · ${nDepois} do depois`:''}`:'fotos expiradas'}${a.vistoria?.avarias?.length?` · ${esc(a.vistoria.avarias.join(', '))}`:''}</div></div>
+        <button class="btn sec peq" onclick="abrirFotoCliente('${a.id}','${cid}')"><span>Ver</span></button></div>`; }).join('')}</div>
+    <button class="btn bloco" style="margin-top:12px" onclick="abrirCliente('${cid}')"><span>← Voltar para a ficha</span></button>
+    <button class="btn sec bloco" style="margin-top:8px" onclick="fecharModal()"><span>Fechar</span></button>`);
+}
+function abrirFotoCliente(id, cid){
+  const a = D.at.find(x=>x.id===id);
+  voltaModal = () => fotosCliente(cid);
+  return a.depois?.fotos?.length ? verFotos(id) : a.vistoria ? verVistoria(id) : verFotos(id);
 }
 
 /* ================= CADASTRO E ACESSO =================
