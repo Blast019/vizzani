@@ -189,3 +189,5 @@ body.ocupado::after{content:"";position:fixed;left:0;right:0;top:0;height:3px;z-
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 /* Número da versão no rodapé (confere se o celular já pegou a atualização) */
 .versao{text-align:center;color:var(--prata-escura);font-size:11px;opacity:.6;margin:22px 0 6px}
+/* No computador (mouse) a faixa de filtros/dias não tem como ser arrastada: quebra em linhas e mostra tudo */
+@media (hover:hover) and (pointer:fine){ .chips{flex-wrap:wrap;overflow-x:visible} }

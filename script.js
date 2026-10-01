@@ -454,7 +454,7 @@ function avisoLicenca(){
     ${licenca.contato?` <a style="color:inherit;font-weight:700" target="_blank" rel="noopener" href="https://api.whatsapp.com/send?phone=${esc(soDig(licenca.contato))}">Falar com o suporte</a>`:''}</div>`;
 }
 // Número da versão (subir junto com VERSAO do sw.js): mostra no rodapé se o celular já pegou a atualização
-const VERSAO_APP = 11;
+const VERSAO_APP = 12;
 const pintarTela = html => { document.getElementById('tela').innerHTML = html + `<p class="versao">versão ${VERSAO_APP}</p>`; };
 function render(){
   if(!D) return;
@@ -1676,6 +1676,8 @@ function telaBalcao(){
   const v = veiculo(buscaPlaca);
   if(!v) return h + telaCadastroRapido();
   const c = cliente(v.clienteId), lista = entreguesDe(v.placa), total = lista.reduce((s,a)=>s+a.valor,0);
+  // Voltar para a busca do Balcão (quando a ficha não foi aberta de outra janela, que já tem o seu "Voltar")
+  if(!(voltaTela && voltaTela.para==='balcao')) h = `<button class="link" style="margin-top:14px;padding:0" onclick="buscaPlaca='';render();window.scrollTo({top:0})">← Voltar para a busca</button>` + h;
   const ultimo = id => lista.find(a=>a.servicoId===id);
   const garantia = garantiaChuva(v.placa);
   h += `<div class="traco">FICHA DO VEÍCULO</div><div class="painel">
